@@ -96,6 +96,7 @@ What NEMESIS provides on the unit, its features, and how to use it.
 | [06 - Cloud Store API](06-Cloud-Store-API.md) | The public store and update API, for running a store of your own in a fork. |
 | [07 - Submit a package](07-Submit-a-Package.md) | Step by step: from an xwtk.Account to a listing in the NEMESIS Package Store. |
 | [Creating a package](docs/creating-a-package.md) | Step-by-step package authoring guide. |
+| [Running the tests](docs/testing.md) | How to run the test suite, coverage, memory checks, and mutation testing. |
 | [Scope and authorization](SCOPE.md) | Ownership, permitted use, and the safety boundaries this project observes. |
 
 The install-path and uninstall-path write-ups (documents 01 and 03) are not part of this checkout.
