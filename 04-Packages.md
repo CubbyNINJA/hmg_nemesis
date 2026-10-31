@@ -83,7 +83,7 @@ Zero or more sections `[app.0]`, `[app.1]`, …
 
 `nemesis pkg-launch <id>` walks `[app.N]` in order. A `component` starts that activity. Otherwise a `package` starts its launcher activity. Otherwise `kind=sh` runs the script. A `kind=instance` service for that package is started too.
 
-`kind=apk`: install runs `pm install -r` on the file at `path`. KitKat `pm` prints `Success` or `Failure [...]` and still exits 0, so NEMESIS trusts that text. While `sys.boot_completed` is `1`, this head unit rejects a signer that is not on the OEM allowlist and `pm` prints `INSTALL_PARSE_FAILED_INCONSISTENT_CERTIFICATES`, including for a package that was never installed. NEMESIS sets `sys.boot_completed` to `0` for that `pm` call only, then restores the previous value. It does not rebroadcast `BOOT_COMPLETED`. If that failure is `INCONSISTENT_CERTIFICATES` and `pm path` shows the package is already present, NEMESIS uninstalls it and retries once. Uninstall calls `pm uninstall` with `package`, or with the package half of `component`. With neither key, uninstall does not call `pm`. When Android is up, a `pm` result other than `Success` fails the NEMESIS install. When Android is down, the apk stays in the package tree and `pkg-launch` tries `pm install` then.
+`kind=apk`: install runs `pm install -r` on the file at `path`. KitKat `pm` prints `Success` or `Failure [...]` and still exits 0, so NEMESIS trusts that text. While `sys.boot_completed` is `1`, this head unit rejects a signer that is not on the OEM allowlist and `pm` prints `INSTALL_PARSE_FAILED_INCONSISTENT_CERTIFICATES`, including for a package that was never installed. NEMESIS sets `sys.boot_completed` to `0` for that `pm` call only, then restores the previous value. It does not rebroadcast `BOOT_COMPLETED`. See `SCOPE.md` for what this means for package provenance on the unit: once NEMESIS is present, the origin and integrity of installed packages is the owner's responsibility, not the platform's. If that failure is `INCONSISTENT_CERTIFICATES` and `pm path` shows the package is already present, NEMESIS uninstalls it and retries once. Uninstall calls `pm uninstall` with `package`, or with the package half of `component`. With neither key, uninstall does not call `pm`. When Android is up, a `pm` result other than `Success` fails the NEMESIS install. When Android is down, the apk stays in the package tree and `pkg-launch` tries `pm install` then.
 
 ---
 
@@ -241,7 +241,8 @@ Locked packages print `package is locked` and stay. Wipe NEMESIS removes everyth
 3. Require `--update` (or USB update confirm) if the id exists.
 4. Refuse an update that would break an installed dependent (exit 21).
 5. Refuse an `incompatible` package unless `--accept-risk` is passed (exit 20).
-6. Extract to `/data/local/tmp/nemesis/stage/<id>` (zip-slip `..` members are not applied).
+6. Extract to `/data/local/tmp/nemesis/stage/<id>`. A member whose path contains `..` rejects the whole
+   package, so extraction cannot escape the staging directory.
 7. `preinstall` → copy tree to `/data/nemesis/apps/<id>/` → `pm install` APKs → register services → write `packages.db` → `postinstall` → start services.
 
 Logs: `nemesis log dump` and `/data/nemesis/nemesis.log`.

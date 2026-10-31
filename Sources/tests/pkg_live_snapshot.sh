@@ -33,11 +33,12 @@ if [ "${NEMESIS_HOOK_NS:-}" != 1 ]; then
         set -euo pipefail
         r="$NEMESIS_ROOTFS/r"
         pylib="$NEMESIS_PYLIB"
-        mkdir -p "$r/usr/bin" "$r/usr/lib64" "$r/usr/lib/x86_64-linux-gnu" "$r$pylib" \
+        mkdir -p "$r/usr/bin" "$r/usr/lib64" "$r/usr/lib" "$r$pylib" \
             "$r/dev" "$r/system" "$r/data" "$r/tmp" "$r$NEMESIS_ROOT" "$r/etc"
         mount --bind /usr/bin "$r/usr/bin"
         mount --bind /usr/lib64 "$r/usr/lib64"
-        mount --bind /usr/lib/x86_64-linux-gnu "$r/usr/lib/x86_64-linux-gnu"
+        # Recursive: a namespace may not hide locked submounts, and WSL mounts under /usr/lib/wsl.
+        mount --rbind /usr/lib "$r/usr/lib"
         mount --bind "$pylib" "$r$pylib"
         mount --bind "$NEMESIS_ROOT" "$r$NEMESIS_ROOT"
         for n in null zero urandom random tty; do

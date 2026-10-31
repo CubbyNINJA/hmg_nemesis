@@ -1,0 +1,32 @@
+# Python and test output
+__pycache__/
+*.pyc
+.pytest_cache/
+.hypothesis/
+.coverage
+.coverage.*
+build-native/
+/out.json
+
+# Signing keys, from `make -C Sources/manager keystore`
+*.keystore
+*.jks
+
+# Native CLI build
+Sources/native/nemesis
+Sources/native/*.o
+
+# Manager APK build
+Sources/manager/NEMESIS.apk
+Sources/manager/res.apk
+Sources/manager/unsigned.apk
+Sources/manager/classes.dex
+Sources/manager/classes/
+Sources/manager/gen/
+
+# Package and installer builds. Packages/ and the projection-tbt APKs are tracked on purpose.
+Sources/out/
+Sources/packages/*.zip
+Sources/examples/*.zip
+Sources/usb_bundle/ota_package.tar
+Sources/usb_bundle/ota_package_troubleshooter.tar

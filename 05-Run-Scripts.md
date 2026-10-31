@@ -2,7 +2,8 @@
 
 NEMESIS is the head unit’s **Debugging Execution Interface**. A **run script** is a one-shot shell file on USB, started with **root rights**, that is **not** installed as a package. Use it for a diagnostic command, a file copy, or a short procedure. Lasting daemons belong in a [package](04-Packages.md).
 
-This document assumes NEMESIS is already on the unit.
+This document assumes NEMESIS is already on the unit. Run scripts execute as root, so treat a USB
+stick as equivalent to root access to the unit — see [SCOPE.md](SCOPE.md).
 
 ---
 
@@ -73,7 +74,7 @@ path=NEMESIS.sh
 
 `path` can be another relative name (`scripts/diag.sh`) as long as the file exists on the stick.
 
-When Android is up, the dialog asks whether to execute the compatible item on the USB drive. **Yes** runs the script; **No** skips. When Android is down and the stick has `NEMESIS.emergency`, the Handler logs `android down; auto-confirm` and runs it, so a stick can recover a unit that is not showing UI. Without that file, the script waits for Android and then gets the dialog.
+When Android is up, the dialog asks whether to execute the compatible item on the USB drive. **Yes** runs the script; **No** skips. When Android is down and the stick has `NEMESIS.emergency`, the Handler logs `android down; auto-confirm` and runs it, so a stick can recover a unit that is not showing UI. Without that file, the script waits for Android and then gets the dialog. Either way the stick must be physically inserted by someone with access to the unit; there is no remote trigger. This is why physical access to the unit should be treated as root access.
 
 The script is started as:
 
@@ -81,7 +82,7 @@ The script is started as:
 /system/bin/sh <full-path-to-script>
 ```
 
-with **cwd = USB root** and **uid root**. Exit code 0 → success dialog (if Android is up); non-zero → failure dialog. The Handler waits until the script **exits** (or the USB is gone).
+with **cwd = USB root** and **uid root**. Exit code 0 → success dialog (if Android is up); non-zero → failure dialog. The Handler waits until the script **exits**. Removing the USB does not end the wait.
 
 ---
 
