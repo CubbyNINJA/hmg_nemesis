@@ -17,6 +17,7 @@ ALLOWED_DOCS = [
     "05-Run-Scripts.md",
     "Packages/README.md",
     "docs/creating-a-package.md",
+    "docs/testing.md",
     "Sources/usb_bundle/README.md",
     "Sources/usb_bundle/DEVICE_TEST.md",
 ]

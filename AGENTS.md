@@ -30,7 +30,7 @@ Documentation scope:
 
 - The canonical docs for work in this repo are `02-Debugging-Execution-Interface.md`,
   `04-Packages.md`, `05-Run-Scripts.md`, `README.md`, `SCOPE.md`, `Packages/README.md`,
-  `docs/creating-a-package.md`, and `Sources/usb_bundle/README.md` + `DEVICE_TEST.md`.
+  `docs/creating-a-package.md`, `docs/testing.md`, and `Sources/usb_bundle/README.md` + `DEVICE_TEST.md`.
 - `01-DSP-OTA-troubleShooter.md` and `03-Install-and-Uninstall.md` cover the install path and are
   not part of this checkout. They are out of scope for package work — do not link to them in new
   docs. Nothing in package authoring depends on them.
@@ -58,6 +58,7 @@ hmg_nemesis/
 │   └── Turn-by-Turn Guidance for Phone Projection.zip
 ├── docs/
 │   ├── creating-a-package.md            ← step-by-step package authoring guide
+│   ├── testing.md                       ← how to run tests, coverage, and mutation testing
 │   └── jev-hooks-replication-prompt.md  ← reusable prompt for Claude Code hook systems
 └── Sources/
     ├── Makefile                    ← top-level dev build (expects a Linux ext4 tree)
@@ -345,6 +346,8 @@ hardcoded paths). Prefer invoking sub-makes and the builder script directly.
 ---
 
 ## 8. Testing
+
+[docs/testing.md](docs/testing.md) has the commands, requirements, and settings for everything below.
 
 | Test | What it does |
 |------|--------------|

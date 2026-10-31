@@ -218,7 +218,7 @@ def session_unit() -> FakeUnit:
     out_dir = Path(keep) if keep else Path(tempfile.mkdtemp(prefix="nem-build-"))
     out_dir.mkdir(parents=True, exist_ok=True)
     # Short on purpose: sockets live under this root and sun_path holds 108 bytes.
-    root = Path(tempfile.mkdtemp(prefix="nem-", dir="/tmp"))
+    root = Path(tempfile.mkdtemp(prefix="nem-", dir=os.environ.get("NEMESIS_UNIT_TMP", "/tmp")))
     return FakeUnit(root, build(root, out_dir))
 
 

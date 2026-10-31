@@ -84,6 +84,7 @@ What NEMESIS provides on the unit, its features, and how to use it.
 | [04 - Packages](04-Packages.md) | Installable packages: metadata, layout, builder, lifecycle. |
 | [05 - Run scripts](05-Run-Scripts.md) | USB `NEMESIS.sh` / `type=execute`: when they run and how to write them. |
 | [Creating a package](docs/creating-a-package.md) | Step-by-step package authoring guide. |
+| [Running the tests](docs/testing.md) | How to run the test suite, coverage, memory checks, and mutation testing. |
 | [Scope and authorization](SCOPE.md) | Ownership, permitted use, and the safety boundaries this project observes. |
 
 The install-path and uninstall-path write-ups (documents 01 and 03) are not part of this checkout.

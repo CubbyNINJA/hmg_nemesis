@@ -11,14 +11,17 @@ import json
 import os
 import re
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
+import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from queue import Queue
 
 REPO = Path(__file__).resolve().parents[3]
+MAX_PROCESSES = 3000
 
 SHELL_OPS = [
     (r"\breturn 1\b", "return 0"),
@@ -147,15 +150,54 @@ def copy_repo(dest: Path) -> None:
     )
 
 
-def limit_file_size() -> None:
-    """A mutant can write without end, and /tmp is often RAM-backed. A killed writer counts as killed."""
+def limit_resources() -> None:
+    """A mutant can write or fork without end, and either can take the whole machine down."""
     import resource
 
     resource.setrlimit(resource.RLIMIT_FSIZE, (256 * 1024 * 1024, 256 * 1024 * 1024))
+    resource.setrlimit(resource.RLIMIT_NPROC, (MAX_PROCESSES, MAX_PROCESSES))
+
+
+def reap(marker: str) -> int:
+    """Kills every process whose command line names this run's unit directory.
+
+    Daemons under test detach on purpose, so ending pytest does not end them, and a mutant can
+    leave them respawning. Repeats until none are left, because a respawner races the scan.
+    """
+    killed = 0
+    for _ in range(20):
+        found = 0
+        for name in os.listdir("/proc"):
+            if not name.isdigit():
+                continue
+            try:
+                cmdline = Path(f"/proc/{name}/cmdline").read_bytes()
+                if marker.encode() in cmdline:
+                    os.kill(int(name), signal.SIGKILL)
+                    found += 1
+            except OSError:
+                continue
+        killed += found
+        if not found:
+            break
+        time.sleep(0.1)
+    return killed
 
 
 def run_tests(root: Path, tests) -> int:
-    env = dict(os.environ, PYTHONDONTWRITEBYTECODE="1")
+    # Short, because unit sockets live under it and sun_path holds 108 bytes.
+    unit_tmp = Path(f"/tmp/nm{os.getpid()}-{root.name}")
+    unit_tmp.mkdir(exist_ok=True)
+    try:
+        return run_pytest(root, tests, unit_tmp)
+    finally:
+        if os.name == "posix":
+            reap(str(unit_tmp) + "/")
+        shutil.rmtree(unit_tmp, ignore_errors=True)
+
+
+def run_pytest(root: Path, tests, unit_tmp: Path) -> int:
+    env = dict(os.environ, PYTHONDONTWRITEBYTECODE="1", NEMESIS_UNIT_TMP=str(unit_tmp))
     cmd = [sys.executable, "-B", "-m", "pytest", "-x", "-q", "--basetemp", str(root / ".tmp"), *tests]
     try:
         return subprocess.run(
@@ -164,8 +206,8 @@ def run_tests(root: Path, tests) -> int:
             env=env,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
-            timeout=600,
-            preexec_fn=limit_file_size if os.name == "posix" else None,
+            timeout=450,
+            preexec_fn=limit_resources if os.name == "posix" else None,
         ).returncode
     except subprocess.TimeoutExpired:
         return 124
