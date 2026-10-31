@@ -13,6 +13,11 @@ HANDOFF*.md
 MEMORY.md
 memory/
 
+# Copyrighted firmware and OEM downloads. See docs/oem-source-release.md.
+Sources/firmware/
+AVNT+STD+G50+WIDE+R*.zip
+Open+Source+S_W+License+Notice_AVNT5W_R*.zip
+
 # Signing keys, from `make -C Sources/manager keystore`
 *.keystore
 *.jks
