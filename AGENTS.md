@@ -499,8 +499,8 @@ def test_invalid_id_is_refused(pkg, tmp_path, bad):
 ```
 
 `known_bug` (`Sources/tests/unit/helpers.py`) is a strict expected failure. The suite stays green
-while the bug exists and goes red once it is fixed, so the fix must remove the marker. Numbers G1–G20
-are already assigned, so new gaps start at G21.
+while the bug exists and goes red once it is fixed, so the fix must remove the marker. Numbers G1–G22
+are already assigned, so new gaps start at G23.
 
 ### Before opening the pull request
 
