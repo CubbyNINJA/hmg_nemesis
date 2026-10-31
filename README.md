@@ -84,6 +84,7 @@ What NEMESIS provides on the unit, its features, and how to use it.
 | [04 - Packages](04-Packages.md) | Installable packages: metadata, layout, builder, lifecycle. |
 | [05 - Run scripts](05-Run-Scripts.md) | USB `NEMESIS.sh` / `type=execute`: when they run and how to write them. |
 | [Creating a package](docs/creating-a-package.md) | Step-by-step package authoring guide. |
+| [OEM source release](docs/oem-source-release.md) | What is in the Mobis open-source download, how to search it, and what it can tell you. |
 | [Running the tests](docs/testing.md) | How to run the test suite, coverage, memory checks, and mutation testing. |
 | [Scope and authorization](SCOPE.md) | Ownership, permitted use, and the safety boundaries this project observes. |
 
