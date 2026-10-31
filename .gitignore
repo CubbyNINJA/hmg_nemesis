@@ -8,6 +8,11 @@ __pycache__/
 build-native/
 /out.json
 
+# Session handoffs and agent memory stay local
+HANDOFF*.md
+MEMORY.md
+memory/
+
 # Signing keys, from `make -C Sources/manager keystore`
 *.keystore
 *.jks
