@@ -1,6 +1,8 @@
 # NEMESIS as a Debugging Execution Interface
 
-NEMESIS is a **Debugging Execution Interface** for a Gen5W head unit. After it is present on the unit, it is used to **install packages** and **run commands with root rights** for engineering, diagnostics, and in-house development. This document does not describe how the interface was placed on the unit. For that, see [03 — Install and uninstall](03-Install-and-Uninstall.md).
+NEMESIS is a **Debugging Execution Interface** for a Gen5W head unit. After it is present on the unit, it is used to **install packages** and **run commands with root rights** for engineering, diagnostics, and in-house development. This document does not describe how the interface was placed on the unit; the install-path write-up is not part of this checkout.
+
+NEMESIS is a privileged local tool operated by the owner of the unit. See [SCOPE.md](SCOPE.md) for ownership, what it is authorized to do, what is out of scope, and the trust implications of having root available locally.
 
 NEMESIS Manager app can be opened from USB or from a shell.
 

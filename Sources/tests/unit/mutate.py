@@ -1,0 +1,228 @@
+#!/usr/bin/env python3
+"""Mutation run over the host suite, on throwaway copies of the repo.
+
+Each mutant changes one spot, then runs the tests that should notice. A mutant the
+tests still pass on has survived. python mutate.py [--jobs N] [--only SUBSTR] [--json FILE]
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
+from queue import Queue
+
+REPO = Path(__file__).resolve().parents[3]
+
+SHELL_OPS = [
+    (r"\breturn 1\b", "return 0"),
+    (r"\breturn 0\b", "return 1"),
+    (r"\bexit 1\b", "exit 0"),
+    (r"\bexit 0\b", "exit 1"),
+    (r"\[ -s ", "[ ! -s "),
+    (r"\[ ! -s ", "[ -s "),
+    (r"\[ -f ", "[ ! -f "),
+    (r"\[ ! -f ", "[ -f "),
+    (r"\[ ! -x ", "[ -x "),
+    (r"-eq 0\b", "-ne 0"),
+    (r"-ne 0\b", "-eq 0"),
+    (r"-lt ", "-ge "),
+    (r"\b_rc=1\b", "_rc=0"),
+    (r"\b_seen=1\b", "_seen=0"),
+    (r"\b_got=1\b", "_got=0"),
+    (r"\bif ! ", "if "),
+    (r"\|\| return 1", "|| true"),
+    (r"\|\| _rc=1", "|| true"),
+    (r"&& return 0", "&& return 1"),
+    (r"\bcp -f ", "true "),
+    (r"\brm -rf ", "true "),
+    (r"\brm -f ", "true "),
+    (r"\bmkdir -p ", "true "),
+    (r"\bsetprop ", "true "),
+    (r"\bsettings (put|delete) ", "true "),
+    (r"\bsys_ro\s*$", "true"),
+    (r"\bsnapshot_all \|\| exit 1", "true"),
+    (r"\bremove_backup_dir \|\| ", "true || "),
+    (r"= replace\b", "!= replace"),
+    (r"= apply\b", "!= apply"),
+    (r"\b5555\b", "5556"),
+    (r"ro\.adb\.secure 0", "ro.adb.secure 1"),
+    (r"persist\.wifi\.state 3", "persist.wifi.state 4"),
+    (r"support carplay", "support none"),
+    (r"p2p_disabled=0", "p2p_disabled=1"),
+    (r'"#\$\{_line\}"', '"${_line}"'),
+    (r"/data/nemesis/backup/\?\*", "*"),
+]
+PY_OPS = [
+    (r"if not meta\.is_file\(\)", "if meta.is_file()"),
+    (r"if p\.is_file\(\)", "if True"),
+    (r"ZIP_DEFLATED", "ZIP_STORED"),
+    (r"\.as_posix\(\)", ".name"),
+    (r"src\.parent / ", "src / "),
+    (r"rglob", "glob"),
+    (r'"w", compression', '"a", compression'),
+    (r"\{src\.name\}\.zip", "{src.name}.tar"),
+]
+# The generated wrapper only. Other util.c text needs a compiler, so it waits for the C layer.
+WRAP_OPS = [
+    (r"\*' remount'\*\)", "*' remountx'*)"),
+    (r"\*'/system'\*\|", "*'/systemx'*|"),
+    (r"\*' / '\*\|", "*' /x '*|"),
+    (r"\*',ro '\*\|", ""),
+    (r"nemesis remount ro", "nemesis remount rw"),
+    (r"exec /system/xbin/nemesis remount rw", "exec /system/xbin/nemesis remount ro"),
+    (r'exec /system/bin/mount \\"\$@\\"', "exit 0"),
+]
+C_OPS = [
+    (r"\breturn -1;", "return 0;"),
+    (r"\breturn 1;", "return 0;"),
+    (r"\breturn 0;", "return 1;"),
+    (r" != 0\b", " == 0"),
+    (r" == 0\b", " != 0"),
+    (r" \|\| ", " && "),
+    (r" && ", " || "),
+    (r"\bif \(!", "if ("),
+    (r" < ", " <= "),
+    (r" >= ", " > "),
+]
+HOOK_TESTS = ["test_hooks.py", "test_hook_faults.py"]
+NATIVE_TESTS = ["test_native_packages.py", "test_native_runtime.py", "test_native_properties.py"]
+TARGETS = [
+    ("Sources/tools/make_nemesis_package.py", PY_OPS, ["test_builder.py", "test_properties.py", "-k", "not adb and not uninstall and not install"], None),
+    ("Sources/native/util.c", WRAP_OPS, ["test_mount_wrapper.py"], "static const char wrap[]"),
+    ("Sources/packages/adb-tcp/scripts/common.sh", SHELL_OPS, HOOK_TESTS + ["test_properties.py"], None),
+    ("Sources/packages/adb-tcp/scripts/post.sh", SHELL_OPS, HOOK_TESTS, None),
+    ("Sources/packages/adb-tcp/scripts/pre.sh", SHELL_OPS, HOOK_TESTS, None),
+    ("Sources/packages/adb-tcp/scripts/preun.sh", SHELL_OPS, HOOK_TESTS, None),
+    ("Sources/packages/wireless-projection/scripts/common.sh", SHELL_OPS, HOOK_TESTS, None),
+    ("Sources/packages/wireless-projection/scripts/post.sh", SHELL_OPS, HOOK_TESTS, None),
+    ("Sources/packages/wireless-projection/scripts/pre.sh", SHELL_OPS, HOOK_TESTS, None),
+    ("Sources/packages/wireless-projection/scripts/preun.sh", SHELL_OPS, HOOK_TESTS, None),
+    *[(f"Sources/native/{name}.c", C_OPS, NATIVE_TESTS, None) for name in ("ini", "zip", "pkg", "svc", "usb", "su", "util", "main")],
+]
+
+
+def generate(only):
+    for rel, ops, tests, region in TARGETS:
+        if only and only not in rel:
+            continue
+        lines = (REPO / rel).read_bytes().decode("utf-8").split("\n")
+        active = region is None
+        for number, raw in enumerate(lines):
+            line = raw.rstrip("\r")
+            if region and region in line:
+                active = True
+                continue
+            if region and active and line.strip() == "};" or region and active and "mkdir_p(NEMESIS_BINDIR" in line:
+                active = False
+            if not active or (rel.endswith(".sh") and line.lstrip().startswith("#")):
+                continue
+            # Comments, preprocessor lines and string continuations such as the mount wrapper.
+            if ops is C_OPS and line.lstrip().startswith(("/*", "*", "//", "#", '"')):
+                continue
+            for pattern, repl in ops:
+                for match in re.finditer(pattern, line):
+                    changed = line[: match.start()] + repl + line[match.end() :]
+                    yield {
+                        "file": rel,
+                        "line": number + 1,
+                        "from": line.strip(),
+                        "to": changed.strip(),
+                        "new": changed,
+                        "tests": tests,
+                    }
+
+
+def copy_repo(dest: Path) -> None:
+    shutil.copytree(
+        REPO,
+        dest,
+        ignore=shutil.ignore_patterns(".git", "__pycache__", "*.pyc", "ota_package.tar"),
+    )
+
+
+def limit_file_size() -> None:
+    """A mutant can write without end, and /tmp is often RAM-backed. A killed writer counts as killed."""
+    import resource
+
+    resource.setrlimit(resource.RLIMIT_FSIZE, (256 * 1024 * 1024, 256 * 1024 * 1024))
+
+
+def run_tests(root: Path, tests) -> int:
+    env = dict(os.environ, PYTHONDONTWRITEBYTECODE="1")
+    cmd = [sys.executable, "-B", "-m", "pytest", "-x", "-q", "--basetemp", str(root / ".tmp"), *tests]
+    try:
+        return subprocess.run(
+            cmd,
+            cwd=str(root / "Sources/tests/unit"),
+            env=env,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=600,
+            preexec_fn=limit_file_size if os.name == "posix" else None,
+        ).returncode
+    except subprocess.TimeoutExpired:
+        return 124
+
+
+def run_mutant(mutant, pool: Queue) -> dict:
+    root = pool.get()
+    target = root / mutant["file"]
+    original = target.read_bytes()
+    try:
+        lines = original.decode("utf-8").split("\n")
+        eol = "\r" if lines[mutant["line"] - 1].endswith("\r") else ""
+        lines[mutant["line"] - 1] = mutant["new"] + eol
+        target.write_bytes("\n".join(lines).encode("utf-8"))
+        rc = run_tests(root, mutant["tests"])
+    finally:
+        target.write_bytes(original)
+        pool.put(root)
+    result = {k: mutant[k] for k in ("file", "line", "from", "to")}
+    result["status"] = "survived" if rc == 0 else "killed"
+    print(f"{result['status']:9} {mutant['file']}:{mutant['line']}  {mutant['to'][:80]}", flush=True)
+    return result
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--jobs", type=int, default=4)
+    ap.add_argument("--only", default=None)
+    ap.add_argument("--json", type=Path, default=None)
+    args = ap.parse_args()
+    mutants = list(generate(args.only))
+    print(f"{len(mutants)} mutants", flush=True)
+    base = Path(tempfile.mkdtemp(prefix="nemesis-mut-"))
+    try:
+        pool: Queue = Queue()
+        for index in range(args.jobs):
+            root = base / str(index)
+            copy_repo(root)
+            pool.put(root)
+        probe = pool.get()
+        for tests in {tuple(m["tests"]) for m in mutants}:
+            if run_tests(probe, list(tests)) != 0:
+                print(f"baseline is not green for {tests}", file=sys.stderr)
+                return 2
+        pool.put(probe)
+        with ThreadPoolExecutor(args.jobs) as ex:
+            results = list(ex.map(lambda m: run_mutant(m, pool), mutants))
+    finally:
+        shutil.rmtree(base, ignore_errors=True)
+    survived = [r for r in results if r["status"] == "survived"]
+    print(f"{len(results) - len(survived)}/{len(results)} killed, {len(survived)} survived")
+    for item in survived:
+        print(f"SURVIVED {item['file']}:{item['line']}\n  - {item['from']}\n  + {item['to']}")
+    if args.json:
+        args.json.write_text(json.dumps(results, indent=1), encoding="utf-8")
+    return 1 if survived else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

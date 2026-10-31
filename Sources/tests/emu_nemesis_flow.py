@@ -51,11 +51,11 @@ def make_fixture_zips() -> None:
     with zipfile.ZipFile(out / "bad-id.zip", "w") as z:
         z.writestr(
             "NEMESIS.data",
-            "[nemesis]\nid=../../../tmp-evil\nname=evil\nversion=1\n",
+            "[nemesis]\nid=../../../tmp-badid\nname=badid\nversion=1\n",
         )
     with zipfile.ZipFile(out / "zip-slip.zip", "w") as z:
         z.writestr("NEMESIS.data", "[nemesis]\nid=slippkg\nname=slip\nversion=1\n")
-        z.writestr("../tmp/pwned", "pwned\n")
+        z.writestr("../tmp/traversal-probe", "traversal-probe\n")
     with zipfile.ZipFile(out / "empty-meta.zip", "w") as z:
         z.writestr("README.txt", "no metadata\n")
     (out / "garbage.bin").write_bytes(b"not a zip\x00\x01\x02")
@@ -701,8 +701,8 @@ def run_corner_tests(g: Guest) -> None:
     if "unzip failed" not in out and "invalid package metadata" not in out:
         fail("zip-slip members should be refused", out)
     print("OK: zip-slip members refused", flush=True)
-    out = g.cmd("ls /tmp/pwned /data/tmp/pwned 2>/dev/null || true", timeout=10)
-    expect_not(out, "pwned", "zip-slip did not write outside stage")
+    out = g.cmd("ls /tmp/traversal-probe /data/tmp/traversal-probe 2>/dev/null || true", timeout=10)
+    expect_not(out, "traversal-probe", "path-traversal member did not write outside stage")
     out = g.cmd("/system/xbin/nemesis uninstall not-installed", timeout=15)
     expect(out, "package not installed", "uninstall unknown package refused")
     out = g.cmd("/system/xbin/nemesis service start nosuch/svc", timeout=15)
