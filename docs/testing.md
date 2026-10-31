@@ -33,9 +33,22 @@ python3 -B -m pytest Sources/tests/unit -k remount         # tests matching a wo
 | Result | Meaning |
 |---|---|
 | `passed` | The behaviour holds. |
-| `xfailed` | A known bug. The test states the correct behaviour, and the reason names the bug, such as `G8`. These do not fail the run. |
-| `skipped` | The test could not run here. The reason says why. One test always skips unless you run under the sanitizers. |
+| `xfailed` | A known bug. The test states the correct behaviour, and its reason says what is wrong. These do not fail the run. |
+| `skipped` | The test could not run here. The reason says why. |
+| `failed` | The behaviour does not hold. The output shows the assertion that failed. |
 | `XPASS(strict)`, shown as a failure | A known bug no longer happens. Remove its `known_bug` marker. |
+
+To see the reason for each `xfailed` or `skipped` result:
+
+```sh
+python3 -B -m pytest Sources/tests/unit/test_builder.py -q
+```
+
+The last line sums up the run, in this form:
+
+```text
+12 passed, 2 skipped, 1 xfailed in 3.21s
+```
 
 ## What needs what
 
@@ -63,6 +76,16 @@ python3 -m coverage report --show-missing
 gcovr --root Sources/native --object-directory build-native build-native --txt
 ```
 
+`gcovr` prints one row per file, and `Missing` lists the lines no test ran:
+
+```text
+File                                       Lines    Exec  Cover   Missing
+------------------------------------------------------------------------------
+example.c                                    100      95    95%   12,40-43
+------------------------------------------------------------------------------
+TOTAL                                        100      95    95%
+```
+
 Delete `build-native` and the `.coverage*` files before you measure again. Otherwise the old counts carry over. Run the variables in a subshell or a new terminal, so they do not affect later runs.
 
 ## Memory checks
@@ -78,7 +101,18 @@ python3 -B -m pytest Sources/tests/unit/test_native_packages.py Sources/tests/un
 ls "$HOME/san"
 ```
 
-Read the reports in `$HOME/san`, not only the test result. Until G22 is fixed, about 20 USB handler tests fail here, all from `usb.c:566`. Any report from a different place is a new bug.
+Read the reports in `$HOME/san`, not only the test result. Each one names the error, and the stack shows where it happened:
+
+```text
+ERROR: AddressSanitizer: heap-use-after-free on address 0x70a88f3e02a0
+    #3 0x5584793dd25d in example_function /path/to/Sources/native/example.c:42
+```
+
+To check one area, name a single file or test:
+
+```sh
+python3 -B -m pytest Sources/tests/unit/test_native_properties.py -k damaged
+```
 
 ## Mutation testing
 
@@ -98,6 +132,21 @@ python3 -B Sources/tests/unit/mutate.py --only Sources/native/ini.c --jobs 3 --j
 | `--only TEXT` | Only targets whose path contains `TEXT`. |
 | `--jobs N` | Mutants to run at once. The default is 4. |
 | `--json FILE` | Writes every result to `FILE`, once the run finishes. |
+
+Each mutant prints a line as it finishes, then the run ends with a total and every survivor:
+
+```text
+3 mutants
+killed    Sources/packages/example/scripts/common.sh:12  cp -f "$a" "$b" || true
+killed    Sources/packages/example/scripts/common.sh:20  return 1
+survived  Sources/packages/example/scripts/common.sh:31  rm -f "$c" || true
+2/3 killed, 1 survived
+SURVIVED Sources/packages/example/scripts/common.sh:31
+  - rm -f "$c" || return 1
+  + rm -f "$c" || true
+```
+
+Here, no test makes that `rm` fail. The fix is a test that does, unless the change cannot affect behaviour.
 
 It exits with 0 if everything was caught, 1 if anything survived, and 2 if the tests already fail before any change, in which case it writes no JSON. An `--only` that matches nothing also exits 0, so check the `N mutants` count on the first line.
 

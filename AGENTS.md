@@ -496,14 +496,13 @@ If a correct scenario fails and the fix is a separate change, keep the scenario 
 ```python
 from helpers import known_bug
 
-@known_bug("G18", "builder never validates the id")
-@pytest.mark.parametrize("bad", ["../../traversal", ".hidden"])
-def test_invalid_id_is_refused(pkg, tmp_path, bad):
+@known_bug("G99", "what is wrong, in one line")
+def test_the_correct_behaviour(nem):
 ```
 
 `known_bug` (`Sources/tests/unit/helpers.py`) is a strict expected failure. The suite stays green
-while the bug exists and goes red once it is fixed, so the fix must remove the marker. Numbers G1–G22
-are already assigned, so new gaps start at G23.
+while the bug exists and goes red once it is fixed, so the fix must remove the marker. For a new
+bug, take the next number after the highest `known_bug` in the tests.
 
 ### Before opening the pull request
 
