@@ -146,7 +146,9 @@ def copy_repo(dest: Path) -> None:
     shutil.copytree(
         REPO,
         dest,
-        ignore=shutil.ignore_patterns(".git", "__pycache__", "*.pyc", "ota_package.tar"),
+        ignore=shutil.ignore_patterns(
+            ".git", "__pycache__", "*.pyc", ".hypothesis", "build-native", "ota_package.tar", "firmware", "AVNT+*", "Open+Source+*"
+        ),
     )
 
 
