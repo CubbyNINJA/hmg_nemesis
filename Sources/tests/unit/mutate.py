@@ -239,8 +239,21 @@ def main() -> int:
     ap.add_argument("--jobs", type=int, default=4)
     ap.add_argument("--only", default=None)
     ap.add_argument("--json", type=Path, default=None)
+    ap.add_argument("--retest", type=Path, action="append", default=[], help="only the survivors in this results file")
+    ap.add_argument("--tests", nargs="+", default=None, help="run these test files instead of the usual ones")
     args = ap.parse_args()
     mutants = list(generate(args.only))
+    if args.retest:
+        # A survivor already passed the usual tests, so only new tests can catch it.
+        keep = set()
+        for path in args.retest:
+            for row in json.loads(path.read_text(encoding="utf-8")):
+                if row["status"] == "survived":
+                    keep.add((row["file"], row["line"], row["to"]))
+        mutants = [m for m in mutants if (m["file"], m["line"], m["to"]) in keep]
+    if args.tests:
+        for mutant in mutants:
+            mutant["tests"] = args.tests
     print(f"{len(mutants)} mutants", flush=True)
     base = Path(tempfile.mkdtemp(prefix="nemesis-mut-"))
     try:
