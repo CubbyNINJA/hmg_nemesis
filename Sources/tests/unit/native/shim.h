@@ -20,6 +20,7 @@
 #include <sys/types.h>
 #include <sys/un.h>
 #include <sys/wait.h>
+#include <sys/xattr.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -89,6 +90,8 @@ int shim_setid(const char *kind, unsigned int id);
 int shim_mount(const char *dev, const char *mnt, const char *fstype, unsigned long flags);
 int shim_chown(const char *path, uid_t owner, gid_t group);
 int shim_kill(pid_t pid, int sig);
+ssize_t shim_lgetxattr(const char *path, const char *name, void *value, size_t size);
+int shim_lsetxattr(const char *path, const char *name, const void *value, size_t size, int flags);
 int shim_execl(const char *path, const char *arg0, ...);
 int shim_execv(const char *path, char *const argv[]);
 void shim_exit(int code) __attribute__((noreturn));
@@ -101,6 +104,8 @@ void shim_exit(int code) __attribute__((noreturn));
 #define stat(path, st) stat(shim_path(path), st)
 #define chown(path, owner, group) shim_chown(path, owner, group)
 #define kill(pid, sig) shim_kill(pid, sig)
+#define lgetxattr(path, name, value, size) shim_lgetxattr(path, name, value, size)
+#define lsetxattr(path, name, value, size, flags) shim_lsetxattr(path, name, value, size, flags)
 #define geteuid() shim_geteuid()
 #define setuid(id) shim_setid("uid", (unsigned int)(id))
 #define setgid(id) shim_setid("gid", (unsigned int)(id))

@@ -1,4 +1,5 @@
 /* Runtime half of shim.h, built without the forced include. */
+#include <errno.h>
 #include <fcntl.h>
 #include <signal.h>
 #include <stdarg.h>
@@ -7,6 +8,7 @@
 #include <string.h>
 #include <sys/stat.h>
 #include <sys/types.h>
+#include <sys/xattr.h>
 #include <unistd.h>
 
 #define MAX_ARGS 64
@@ -80,6 +82,29 @@ int shim_chown(const char *path, uid_t owner, gid_t group) {
     (void)owner;
     (void)group;
     return access(TEST_ROOT "/chown_fails", F_OK) == 0 ? -1 : 0;
+}
+
+/* A file named labels_refused acts like a unit where a label can be read but not set, which
+ * is what a real update log showed as errno 95. Otherwise this is the host's own behaviour. */
+static int labels_refused(void) {
+    return access(TEST_ROOT "/labels_refused", F_OK) == 0;
+}
+
+ssize_t shim_lgetxattr(const char *path, const char *name, void *value, size_t size) {
+    static const char label[] = "u:object_r:system_file:s0";
+    if (labels_refused() && size >= sizeof(label)) {
+        memcpy(value, label, sizeof(label));
+        return (ssize_t)sizeof(label);
+    }
+    return lgetxattr(path, name, value, size);
+}
+
+int shim_lsetxattr(const char *path, const char *name, const void *value, size_t size, int flags) {
+    if (labels_refused()) {
+        errno = EOPNOTSUPP;
+        return -1;
+    }
+    return lsetxattr(path, name, value, size, flags);
 }
 
 /* stop_daemons() kills every NEMESIS daemon on the machine. On a unit that is right. Here it would

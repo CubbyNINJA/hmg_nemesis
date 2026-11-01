@@ -12,6 +12,7 @@ import zipfile
 
 import pytest
 
+from helpers import known_bug
 from native_unit import executable, make_zip, wait_for
 
 SVC = "my.tool/d"
@@ -594,9 +595,23 @@ def test_too_many_arguments_are_refused(nem):
     Then the command does not run, and the channel keeps working
     """
     start_channel(nem)
-    res = nem.run("root", "-c", "echo", *["x"] * 40, euid=1000)
-    assert res.returncode == 1
+    marker = nem.root / "ran"
+    res = nem.run("root", "-c", f'touch "{marker}"', *["x"] * 40, euid=1000)
+    assert res.returncode != 0
+    assert not marker.exists()
     assert nem.run("ping").returncode == 0
+
+
+@known_bug("G26", "the client does not ignore SIGPIPE, so a hang-up kills it before it can report the failure")
+def test_a_client_the_channel_hangs_up_on_reports_the_failure(nem):
+    """Given a running channel and far more data than a socket buffers, so the client is still writing
+    When the channel refuses the request and closes
+    Then the client exits 1 and says so, rather than dying on a signal (su.c:427)
+    """
+    start_channel(nem)
+    res = nem.run("root", "-c", "echo", *["x" * 700] * 1000, euid=1000)
+    assert res.returncode == 1
+    assert "daemon write failed" in res.stderr
 
 
 # --- The USB handler reports results (usb.c)

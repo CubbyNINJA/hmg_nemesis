@@ -11,6 +11,7 @@ import re
 import stat
 import subprocess
 import sys
+import zipfile
 
 import pytest
 
@@ -199,6 +200,9 @@ def replace_line(old, new):
     [
         (False, "", "MD5SUMS missing"),
         ("zzz  core/nemesis\n", "", "bad MD5SUMS line"),
+        ("z" * 32 + "  core/nemesis\n", "", "bad MD5SUMS line"),
+        ("G" * 32 + "  core/nemesis\n", "", "bad MD5SUMS line"),
+        ("/" * 32 + "  core/nemesis\n", "", "bad MD5SUMS line"),
         (replace_line("  core/nemesis", "core/nemesis"), "", "bad MD5SUMS line"),
         (None, f"{md5('x')}  ../outside\n", "bad path"),
         (None, f"{md5('x')}  /etc/outside\n", "bad path"),
@@ -207,7 +211,7 @@ def replace_line(old, new):
         (lambda m: f"{md5(m['NEMESIS.data'])}  NEMESIS.data\n", "", "core/nemesis missing"),
         (lambda m: f"{md5(m['core/nemesis'])}  core/nemesis\n", "", "listed in MD5SUMS"),
     ],
-    ids=["missing", "bad-hash", "no-separator", "parent-path", "absolute-path", "absent-file", "wrong-hash", "no-binary-line", "unlisted-file"],
+    ids=["missing", "bad-hash", "letter-hash", "upper-letter-hash", "symbol-hash", "no-separator", "parent-path", "absolute-path", "absent-file", "wrong-hash", "no-binary-line", "unlisted-file"],
 )
 def test_a_package_that_fails_its_checksums_changes_nothing(installed, sums, extra, message):
     """Given an update package whose MD5SUMS does not vouch for every file (update.c:172)
@@ -249,6 +253,39 @@ def test_checksum_lines_accept_comments_uppercase_and_the_binary_marker(installe
 
     res = nem.run("update", update_zip(nem, sums=sums))
     assert res.returncode == 0, res.stderr
+
+
+@pytest.mark.parametrize("name", ["core/..notes", "core/a..b", "core/notes.."])
+def test_a_file_name_with_two_dots_is_not_a_parent_path(installed, name):
+    """Given an MD5SUMS line whose name holds two dots but no parent step (update.c:133)
+    When `nemesis update` checks it
+    Then it is treated as an ordinary file, so what fails is the checksum and not the path
+    """
+    nem = installed
+    res = nem.run("update", update_zip(nem, extra_sums=f"{md5('x')}  {name}\n"))
+    assert res.returncode == 8
+    assert "md5 mismatch" in res.stderr
+
+
+@pytest.mark.parametrize("path", ["core/../x", ".."])
+def test_a_parent_step_anywhere_in_a_path_is_refused(installed, path):
+    nem = installed
+    res = nem.run("update", update_zip(nem, extra_sums=f"{md5('x')}  {path}\n"))
+    assert res.returncode == 8
+    assert "bad path" in res.stderr
+
+
+def test_a_zip_that_will_not_unpack_is_refused(installed):
+    """Given an update whose metadata reads fine but where one member is also a folder of another
+    When `nemesis update` runs
+    Then it exits 1, removes its staging folder and leaves the unit as it was
+    """
+    nem = installed
+    res = nem.run("update", update_zip(nem, files={"clash": "x", "clash/inner": "y"}))
+    assert res.returncode == 1
+    assert "unzip failed" in res.stderr
+    assert not nem.path("data/nemesis/update/stage").exists()
+    assert unchanged(nem)
 
 
 @pytest.mark.parametrize("binary, message", [(b"#!/bin/sh\nexit 0\n", "not an ELF"), (b"", "not an ELF"), (b"\x7fELFnot really", "does not run")])
@@ -325,7 +362,37 @@ def test_a_failed_migration_restores_the_previous_version(installed):
     assert not nem.path(f"system/etc/security/cacerts/{CA}").exists()
     assert not nem.path("data/nemesis/owned-cacerts").exists()
     assert last_result(nem) == "failed restored\n"
+    assert "update: failed; restore ok" in nem.log()
     assert "reboot" not in nem.calls()
+
+
+def test_a_restore_that_cannot_remount_is_reported(installed, locked_dirs):
+    """Given a failed migration that also leaves /system unwritable (update.c:416)
+    When the restore starts
+    Then it stops there and exits 11
+    """
+    nem = installed
+    locked_dirs("system/xbin").chmod(0o755)
+    script = f'chmod 555 "{nem.path("system/xbin")}"\nexit 3\n'
+    res = nem.run("update", update_zip(nem, files={"scripts/migrate.sh": script}))
+    assert res.returncode == 11
+    assert "restore: remount rw failed" in nem.log()
+    assert last_result(nem) == "failed restore-failed\n"
+
+
+def test_a_target_that_cannot_be_replaced_fails_the_update(installed):
+    """Given a directory where the Manager APK should go, so the final rename fails (update.c:390)
+    When `nemesis update` runs
+    Then it reports that and restores, rather than carrying on as if the file were placed
+    """
+    nem = installed
+    apk = nem.path("system/app/NEMESIS.apk")
+    apk.unlink()
+    apk.mkdir()
+    res = nem.run("update", update_zip(nem, files={"core/NEMESIS.apk": "new"}))
+    assert res.returncode == 10
+    assert "could not replace" in res.stderr
+    assert unchanged(nem)
 
 
 def test_a_failed_restore_is_reported_as_such(installed, locked_dirs):
@@ -340,6 +407,7 @@ def test_a_failed_restore_is_reported_as_such(installed, locked_dirs):
     assert res.returncode == 11
     assert "restore failed" in res.stdout
     assert last_result(nem) == "failed restore-failed\n"
+    assert "update: failed; restore FAILED" in nem.log()
 
 
 def test_a_file_that_cannot_be_placed_restores_the_previous_version(installed, locked_dirs):
@@ -407,6 +475,37 @@ def test_a_restore_also_puts_the_quickboot_file_back(installed):
     assert qb.read_text() == "stock\n" + OLD_HOOK
 
 
+@known_bug("G27", "a label that cannot be copied fails the whole update, as errno 95 did on a real unit")
+def test_a_filesystem_that_refuses_labels_does_not_stop_the_update(installed):
+    """Given a unit where the QuickBoot file's label can be read but not set
+    When an update replaces the hook
+    Then the update still finishes, because the hook's contents are what matter (pkg.c:1135)
+    """
+    nem = installed
+    qb = nem.path("system/etc/qb_runtime.sh")
+    qb.write_text("stock\n" + OLD_HOOK)
+    nem.path("labels_refused").write_text("")
+    res = nem.run("update", update_zip(nem, files={"core/qb_hook.sh": HOOK}))
+    assert res.returncode == 0, res.stderr + nem.log()
+    assert qb.read_text() == "stock\n" + HOOK
+
+
+@known_bug("G28", "the restore rewrites a QuickBoot file the update never changed, and reports that failure")
+def test_a_restore_does_not_fail_over_a_file_that_never_changed(installed):
+    """Given a failed update that never touched the QuickBoot file, on a unit that refuses labels
+    When the restore runs
+    Then it reports success, because everything is back as it was (update.c:429)
+    """
+    nem = installed
+    qb = nem.path("system/etc/qb_runtime.sh")
+    qb.write_text("stock\n")
+    nem.path("labels_refused").write_text("")
+    res = nem.run("update", update_zip(nem, files={"scripts/migrate.sh": "exit 1\n"}))
+    assert res.returncode == 10, res.stdout
+    assert last_result(nem) == "failed restored\n"
+    assert qb.read_text() == "stock\n"
+
+
 # --- Root certificates
 
 
@@ -435,7 +534,23 @@ def certs(nem, names):
     return source
 
 
-@pytest.mark.parametrize("name", ["aabbccdd.0", "a.9"])
+def test_an_owned_certificate_put_back_is_recorded_once(nem):
+    """Given two certificates NEMESIS added, one of which has since gone missing
+    When the same set is installed again
+    Then it is put back and the record does not list it twice (update.c:234)
+    """
+    source = certs(nem, ["11111111.0", "22222222.0"])
+    nem.run("cacerts-install", source)
+    owned = nem.path("data/nemesis/owned-cacerts")
+    lines = owned.read_text().splitlines()
+    assert sorted(lines) == ["11111111.0", "22222222.0"]
+    for name in lines:
+        nem.path(f"system/etc/security/cacerts/{name}").unlink()
+    assert "ok added 2 root" in nem.run("cacerts-install", source).stdout
+    assert sorted(owned.read_text().splitlines()) == ["11111111.0", "22222222.0"]
+
+
+@pytest.mark.parametrize("name", ["aabbccdd.0", "a.9", "00000000.0"])
 def test_cacerts_install_adds_well_named_files(nem, name):
     res = nem.run("cacerts-install", certs(nem, [name]))
     assert res.returncode == 0
@@ -519,6 +634,12 @@ def test_core_packages_install_locked(installed):
     assert "core.tool|Core|1|service" in nem.db()
 
 
+def test_a_core_package_with_a_one_letter_name_installs(installed):
+    nem = installed
+    assert nem.run("update", update_zip(nem, files={"core-packages/a.zip": core_package(nem)})).returncode == 0
+    assert "core.tool|" in nem.db()
+
+
 def test_a_core_package_that_fails_restores_the_previous_version(installed):
     nem = installed
     files = {"core-packages/core.zip": b"not a zip"}
@@ -600,6 +721,29 @@ def test_the_tool_defaults_to_the_version_in_the_source(installed, tool_files):
     out = nem.workdir / "t.zip"
     assert tool("-o", out, "--no-apk", *tool_args(tool_files)).returncode == 0
     assert f"package-version={VERSION}\n" in nem.run("pkg-info", out).stdout
+
+
+def test_the_tool_compresses_and_can_leave_out_the_apk(installed, tool_files):
+    nem = installed
+    out = nem.workdir / "t.zip"
+    assert tool("-o", out, "--version", NEWER, *tool_args(tool_files)).returncode == 0
+    with zipfile.ZipFile(out) as z:
+        assert z.getinfo("core/nemesis").compress_type == zipfile.ZIP_DEFLATED
+        assert "core/NEMESIS.apk" in z.namelist()
+    assert tool("-o", out, "--version", NEWER, "--no-apk", *tool_args(tool_files)).returncode == 0
+    assert "core/NEMESIS.apk" not in zipfile.ZipFile(out).namelist()
+
+
+def test_the_tool_leaves_out_an_apk_that_does_not_exist(installed, tool_files):
+    (tool_files / "NEMESIS.apk").unlink()
+    out = installed.workdir / "t.zip"
+    assert tool("-o", out, "--version", NEWER, *tool_args(tool_files)).returncode == 0
+    assert "core/NEMESIS.apk" not in zipfile.ZipFile(out).namelist()
+
+
+def test_the_tool_accepts_a_description_at_the_limit(installed, tool_files):
+    res = tool("-o", installed.workdir / "t.zip", "--short-desc", "x" * 64, *tool_args(tool_files))
+    assert res.returncode == 0, res.stderr
 
 
 def test_a_package_the_tool_corrupts_on_request_is_refused(installed, tool_files):

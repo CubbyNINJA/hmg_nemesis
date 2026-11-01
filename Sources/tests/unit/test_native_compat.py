@@ -6,6 +6,7 @@ Sources: 04-Packages.md sections 2 and 3, 05-Run-Scripts.md section 2, and
 from __future__ import annotations
 
 import subprocess
+import time
 
 import pytest
 
@@ -46,7 +47,11 @@ def install(nem, id_, version="", depends="", extra=""):
 REFUSED = [
     ("version=abc\nid=my.tool\n", "bad version"),
     ("version=1.\nid=my.tool\n", "bad version"),
+    ("version=.1\nid=my.tool\n", "bad version"),
+    ("version=1..2\nid=my.tool\n", "bad version"),
+    ("version=1a2\nid=my.tool\n", "bad version"),
     ("version=1.1\nid=my.tool\npackage-version=1.x\n", "package-version"),
+    ("version=1.1\nid=my.tool\npackage-version=1a2\n", "package-version"),
     ("id=my.tool\nshort-desc=" + "x" * 65 + "\n", "short-desc"),
     ("id=my.tool\ndetailed-desc=" + "x" * 257 + "\n", "detailed-desc"),
     ("id=my.tool\ndepends=@1.0\n", "bad depends"),
@@ -55,7 +60,7 @@ REFUSED = [
     ("id=my.tool\ndepends=other@-1.0\n", "bad depends"),
     ("id=my.tool\ndepends=other@1.0-\n", "bad depends"),
     ("id=my.tool\ndepends=my.tool\n", "depends on itself"),
-    ('id=my.tool\nshort-desc="never closed\n', ""),
+    ('id=my.tool\nshort-desc="never closed\n', "unterminated"),
 ]
 
 
@@ -144,6 +149,10 @@ def test_pkg_info_refuses_what_it_cannot_find_or_read(nem):
         ("?.0", "none", "full"),
         ("9,1.0", "none", "full"),
         (" 9 , 1.0 ", "none", "full"),
+        ("\t9\t,\t1.0\t", "none", "full"),
+        ("9,\n1.0\n", "none", "full"),
+        ("1.*9", "none", "incompatible"),
+        ("1.0?", "none", "incompatible"),
         ("9", "EV6", "partial"),
         ("9", "EV*", "partial"),
         ("9", "any", "partial"),
@@ -192,6 +201,13 @@ def test_compat_check_needs_both_lists(nem):
         ("dep@1.3-1.5", False),
         ("dep@1.0-1.1", False),
         ("dep@1.10", False),
+        ("dep@1.2.1", False),
+        ("dep@1.2-1.5", True),
+        ("dep@1.0-1.2", True),
+        ("dep @ 1.2", True),
+        ("\tdep\t@\t1.2\t", True),
+        ("dep@", True),
+        ("dep@" + "1" * 32 + "-2", False),
     ],
 )
 def test_a_dependency_spec_matches_as_documented(nem, spec, ok):
@@ -209,6 +225,7 @@ def test_versions_compare_as_numbers_not_text(nem):
 def test_a_dependency_with_no_version_meets_only_any(nem):
     install(nem, "dep")
     assert field(nem.run("compat-check", "any", "any", "dep"), "compat") == "full"
+    assert field(nem.run("compat-check", "any", "any", "dep@>=0"), "compat") == "incompatible"
     res = nem.run("compat-check", "any", "any", "dep@1.0")
     assert field(res, "compat") == "incompatible"
     assert "have unknown" in res.stdout
@@ -289,8 +306,98 @@ def test_an_update_that_breaks_a_dependent_is_blocked(nem):
 
 def test_an_update_that_keeps_a_dependent_satisfied_goes_ahead(nem):
     install(nem, "dep", "1.0")
-    install(nem, "my.tool", depends="dep@>=1.0")
+    assert install(nem, "my.tool", depends="dep@>=1.0").returncode == 0
     assert install(nem, "dep", "2.0", extra="--update").returncode == 0
+
+
+def test_a_package_that_depends_on_something_else_does_not_block_uninstall(nem):
+    install(nem, "dep", "1.0")
+    install(nem, "other", "1.0")
+    assert install(nem, "my.tool", depends="other").returncode == 0
+    assert nem.run("uninstall", "dep").returncode == 0
+
+
+@pytest.mark.parametrize("spec", ["any", "1.2", ">=1.2", "<=1.2", "1.2-1.5", "1" * 31 + "-2"])
+def test_every_documented_spec_form_is_accepted(nem, spec):
+    assert info(nem, f"[nemesis]\nid=my.tool\ndepends=other@{spec}\n").returncode == 0
+
+
+def test_a_range_too_long_to_compare_is_refused(nem):
+    assert info(nem, "[nemesis]\nid=my.tool\ndepends=other@" + "1" * 32 + "-2\n").returncode != 0
+
+
+@known_bug("G29", "the builder has no length limit on a range, so it builds a package the unit refuses")
+def test_the_builder_refuses_a_range_too_long_for_the_unit(tmp_path):
+    folder = tmp_path / "pkg"
+    folder.mkdir()
+    (folder / "NEMESIS.data").write_text("[nemesis]\nid=my.tool\ndepends=other@" + "1" * 32 + "-2\n")
+    res = subprocess.run(builder_cmd(folder, "-o", tmp_path / "o.zip"), stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    assert res.returncode != 0
+
+
+def test_a_missing_id_is_named(nem):
+    res = info(nem, "[nemesis]\nname=N\n")
+    assert res.returncode != 0
+    assert "missing id" in res.stderr
+
+
+# Sizes from pkg_meta in nemesis.h. A value that does not fit is refused rather than cut short.
+FIELDS = [
+    ("name", 128, "x"),
+    ("type", 80, "x"),
+    ("package-version", 32, "1"),
+    ("depends", 512, "x"),
+    ("os", 256, "x"),
+    ("models", 256, "x"),
+]
+
+
+@pytest.mark.parametrize("key, size, char", FIELDS)
+def test_a_field_that_does_not_fit_is_refused(nem, key, size, char):
+    """Given a descriptor field exactly the size of its buffer, and one a byte smaller
+    When the unit reads it
+    Then the first is refused and named, and the second is accepted (meta.c:165)
+    """
+    version = "version=1.1\n" if key == "type" else ""
+    too_long = info(nem, f"[nemesis]\n{version}id=my.tool\n{key}={char * size}\n")
+    assert too_long.returncode != 0
+    assert f"{key} is too long" in too_long.stderr
+    assert info(nem, f"[nemesis]\n{version}id=my.tool\n{key}={char * (size - 1)}\n").returncode == 0
+
+
+def test_an_id_too_long_for_its_buffer_is_refused(nem):
+    res = info(nem, "[nemesis]\nid=" + "x" * 96 + "\n")
+    assert res.returncode != 0
+    assert "id is too long" in res.stderr
+
+
+@pytest.mark.parametrize("quote", ["", '"'], ids=["plain", "quoted"])
+def test_ini_values_fit_up_to_their_limit(nem, quote):
+    """Given a value of 1023 bytes, and one of 1024 (ini.c:100)
+    When the unit reads them
+    Then the first is accepted and the second is refused by name
+    """
+    fits = info(nem, f"[nemesis]\nid=my.tool\nnote={quote}{'x' * 1023}{quote}\n")
+    assert fits.returncode == 0, fits.stderr
+    over = info(nem, f"[nemesis]\nid=my.tool\nnote={quote}{'x' * 1024}{quote}\n")
+    assert over.returncode != 0
+    assert "value too long" in over.stderr
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "[nemesis]\rid=my.tool\rname=N\r",
+        "[nemesis]\r\n\tid=my.tool\r\n",
+        '[nemesis]\n# x="never closed\nid=my.tool\n',
+        '[nemesis]\n; x="never closed\nid=my.tool\n',
+    ],
+    ids=["lone-cr", "tab-indent", "hash-comment", "semicolon-comment"],
+)
+def test_ini_line_forms_are_read(nem, text):
+    res = info(nem, text)
+    assert res.returncode == 0, res.stderr
+    assert field(res, "id") == "my.tool"
 
 
 def failing_preuninstall(nem):
@@ -333,6 +440,54 @@ def test_wipe_with_no_reboot_does_not_reboot(nem):
     assert "reboot" not in nem.calls()
 
 
+# --- Service manager changes in 1.16
+
+
+def test_starting_a_disabled_service_by_hand_gives_it_one_more_run(nem):
+    """Given a restart service that was disabled after 5 deaths (04-Packages.md section 4)
+    When it is started by hand
+    Then it runs, and the log says it was a manual start
+    """
+    sections = "[service.0]\nname=d\nkind=sh\npath=svc/d.sh\nmode=restart\n"
+    nem.run("install", nem.package(log_hooks=False, sections=sections, files={"svc/d.sh": "sleep 60\n"}))
+    nem.run("service", "stop", "my.tool/d")
+    nem.path("data/nemesis/pids/my.tool+d.fails").write_text("5\n")
+    assert nem.run("service", "start", "my.tool/d").returncode == 0
+    assert "|running" in nem.run("service", "status", "my.tool/d").stdout
+    assert "manual start of disabled service my.tool/d" in nem.log()
+
+
+def android_up_events(nem):
+    return nem.calls().count("com.nemesis.manager.ANDROID_UP")
+
+
+def test_android_up_is_announced_only_once_android_is_up(nem):
+    """Given the service manager running with Android down (svc.c:329)
+    When Android comes up and stays up
+    Then the event goes out once, and not before
+    """
+    nem.android(up=False)
+    nem.daemon("svcmgr")
+    time.sleep(7)
+    assert android_up_events(nem) == 0
+    nem.android(up=True)
+    assert wait_for(lambda: android_up_events(nem) == 1, 20), nem.log()
+
+
+def test_android_up_is_not_announced_twice_in_one_boot(nem):
+    """Given the event already sent this boot
+    When the daemons restart
+    Then it is not sent again, because the mark holds the boot id
+    """
+    nem.daemon("svcmgr")
+    assert wait_for(lambda: android_up_events(nem) == 1, 20), nem.log()
+    assert nem.path("data/nemesis/android-up").read_text().strip()
+    nem.kill_all()
+    nem.daemon("svcmgr")
+    time.sleep(9)
+    assert android_up_events(nem) == 1
+
+
 # --- nemesis usb-info
 
 
@@ -363,6 +518,13 @@ def test_usb_info_describes_the_stick(nem):
 def test_usb_info_leaves_out_a_path_the_handler_would_refuse(nem):
     nem.stick("[nemesis]\ntype=install\npath=../p.zip\n")
     assert "path=" not in nem.run("usb-info").stdout
+
+
+def test_usb_info_reports_a_descriptor_it_cannot_read(nem):
+    nem.stick('[nemesis]\ntype="never closed\n')
+    res = nem.run("usb-info")
+    assert res.returncode == 1
+    assert "type=" not in res.stdout
 
 
 def test_usb_info_list_prints_the_descriptor(nem):
@@ -436,17 +598,56 @@ def test_an_update_stick_that_fails_says_so(nem):
     assert nem.cli.read_bytes() == nem.binary.read_bytes()
 
 
-@pytest.mark.parametrize("answer, updated", [("yes", True), ("no", False)])
-def test_an_incompatible_update_stick_asks_about_the_risk(nem, answer, updated):
-    nem.answer_dialogs(answer)
+def answer_in_turn(nem, *replies):
+    """Manager stand-in that gives each dialog the next reply, as a person tapping would."""
+    answers = nem.root / "answers"
+    answers.write_text("".join(f"{reply}\n" for reply in replies))
+    session = nem.root / "data" / "nemesis" / "usb-session"
+    script = (
+        f'echo "am $*" >> "{nem.root}/calls"\n'
+        f'(sleep 1; mkdir -p "{session}"; head -1 "{answers}" > "{session}/reply"; sed -i 1d "{answers}") >/dev/null 2>&1 &\n'
+    )
+    executable(nem.bin("am"), script)
+
+
+def test_accepting_the_risk_on_an_update_stick_updates(nem):
+    answer_in_turn(nem, "yes", "yes", "ok")
     update_stick(nem, meta="os=none\nmodels=none\n")
     run_handler(nem)
-    if updated:
-        assert wait_for(lambda: "reboot" in nem.calls(), timeout=30), nem.log()
-    else:
-        handled(nem)
-    assert "nemesis_mode confirm_update" in nem.calls()
-    assert (nem.cli.read_bytes() == new_binary(nem)) == updated
+    assert wait_for(lambda: "reboot" in nem.calls(), timeout=30), nem.log()
+    assert "nemesis_mode confirm_risk" in nem.calls()
+    assert nem.cli.read_bytes() == new_binary(nem)
+
+
+def test_declining_the_risk_on_an_update_stick_changes_nothing(nem):
+    """Given an update stick marked for another OS and model (update.c exit 20)
+    When the user confirms the update and then declines the risk
+    Then nothing is installed and no reboot happens
+    """
+    answer_in_turn(nem, "yes", "no")
+    update_stick(nem, meta="os=none\nmodels=none\n")
+    run_handler(nem)
+    assert wait_for(lambda: "compatibility risk declined" in nem.log(), timeout=30), nem.log()
+    assert "reboot" not in nem.calls()
+    assert nem.cli.read_bytes() == nem.binary.read_bytes()
+
+
+def test_with_android_down_an_old_update_stick_is_recorded_as_up_to_date(nem):
+    nem.android(up=False)
+    update_stick(nem, OLDER)
+    run_handler(nem)
+    handled(nem)
+    assert "up-to-date" in nem.session_log()
+    assert nem.cli.read_bytes() == nem.binary.read_bytes()
+
+
+def test_the_log_says_why_a_stick_is_waiting(nem):
+    nem.android(up=False)
+    nem.stick("[nemesis]\ntype=install\npath=p.zip\n", emergency=False)
+    run_handler(nem)
+    assert wait_for(lambda: "waiting for Android" in nem.log()), nem.log()
+    time.sleep(2)
+    assert nem.log().count("waiting for Android") == 1
 
 
 @pytest.mark.parametrize(
@@ -524,14 +725,7 @@ def test_declining_the_risk_on_a_reinstall_keeps_the_installed_package(nem):
     Then nothing has changed
     """
     device(nem)
-    answers = nem.root / "answers"
-    answers.write_text("yes\nno\n")
-    session = nem.root / "data" / "nemesis" / "usb-session"
-    script = (
-        f'echo "am $*" >> "{nem.root}/calls"\n'
-        f'(sleep 1; mkdir -p "{session}"; head -1 "{answers}" > "{session}/reply"; sed -i 1d "{answers}") >/dev/null 2>&1 &\n'
-    )
-    executable(nem.bin("am"), script)
+    answer_in_turn(nem, "yes", "no")
     reinstall_stick(nem, {"NEMESIS.data": "[nemesis]\nid=my.tool\nos=9\nmodels=none\n"})
     run_handler(nem)
     assert wait_for(lambda: "nemesis_mode confirm_risk" in nem.calls(), timeout=25), nem.log()

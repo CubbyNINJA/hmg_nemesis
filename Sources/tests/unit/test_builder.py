@@ -144,6 +144,44 @@ def test_valid_dependency_specs_build(pkg, tmp_path, depends):
     assert build(pkg, "-o", tmp_path / "o.zip").returncode == 0
 
 
+@pytest.mark.parametrize("key, limit", [("short-desc", 64), ("detailed-desc", 256)])
+def test_a_description_at_its_limit_builds(pkg, tmp_path, key, limit):
+    manifest(pkg, f"[nemesis]\nid=my.tool\n{key}={'x' * limit}\n")
+    assert build(pkg, "-o", tmp_path / "o.zip").returncode == 0
+    manifest(pkg, f"[nemesis]\nid=my.tool\n{key}={'x' * (limit + 1)}\n")
+    assert build(pkg, "-o", tmp_path / "o.zip").returncode != 0
+
+
+@pytest.mark.parametrize(
+    "newline, chars",
+    [("\r\n", 1), ("\r", 1), ("\n", 1)],
+    ids=["crlf", "lone-cr", "lf"],
+)
+def test_a_line_break_in_a_quoted_value_counts_as_one_character(pkg, tmp_path, newline, chars):
+    """Given a quoted description that is exactly at the limit with its line break as one character
+    When the builder measures it, as the unit does (ini.c:95)
+    Then it builds
+    """
+    text = "x" * (32 - chars) + newline + "x" * 32
+    manifest(pkg, f'[nemesis]\nid=my.tool\nshort-desc="{text}"\n')
+    assert build(pkg, "-o", tmp_path / "o.zip").returncode == 0
+
+
+def test_a_lone_return_ends_a_line(pkg, tmp_path):
+    manifest(pkg, "[nemesis]\rid=my.tool\rname=N\r")
+    assert build(pkg, "-o", tmp_path / "o.zip").returncode == 0
+
+
+def test_a_section_line_with_no_closing_bracket_changes_nothing(pkg, tmp_path):
+    manifest(pkg, "[nemesis]\n[broken\nid=my.tool\n")
+    assert build(pkg, "-o", tmp_path / "o.zip").returncode == 0
+
+
+def test_type_and_types_together_do_not_warn(pkg, tmp_path):
+    manifest(pkg, "[nemesis]\nversion=1.1\nid=my.tool\ntype=a\ntypes=a\npackage-version=1.0\nshort-desc=s\n")
+    assert "warning" not in build(pkg, "-o", tmp_path / "o.zip").stdout
+
+
 def test_a_value_over_the_ini_limit_is_refused(pkg, tmp_path):
     manifest(pkg, "[nemesis]\nid=my.tool\nname=" + "x" * 1024 + "\n")
     res = build(pkg, "-o", tmp_path / "o.zip")
