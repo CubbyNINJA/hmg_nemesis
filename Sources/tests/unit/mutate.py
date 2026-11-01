@@ -2,7 +2,7 @@
 """Mutation run over the host suite, on throwaway copies of the repo.
 
 Each mutant changes one spot, then runs the tests that should notice. A mutant the
-tests still pass on has survived. python mutate.py [--jobs N] [--only SUBSTR] [--json FILE]
+tests still pass on has survived. python mutate.py [--jobs N] [--only SUBSTR] [--diff FILE] [--json FILE]
 """
 from __future__ import annotations
 
@@ -71,6 +71,13 @@ PY_OPS = [
     (r"rglob", "glob"),
     (r'"w", compression', '"a", compression'),
     (r"\{src\.name\}\.zip", "{src.name}.tar"),
+    (r"\bif not ", "if "),
+    (r" > ", " >= "),
+    (r" >= ", " > "),
+    (r" != ", " == "),
+    (r" == ", " != "),
+    (r" and ", " or "),
+    (r" or ", " and "),
 ]
 # The generated wrapper only. Other util.c text needs a compiler, so it waits for the C layer.
 WRAP_OPS = [
@@ -95,9 +102,12 @@ C_OPS = [
     (r" >= ", " > "),
 ]
 HOOK_TESTS = ["test_hooks.py", "test_hook_faults.py"]
-NATIVE_TESTS = ["test_native_packages.py", "test_native_runtime.py", "test_native_properties.py"]
+UPDATE_TESTS = ["test_native_update.py", "test_native_compat.py"]
+NATIVE_TESTS = [*UPDATE_TESTS, "test_native_packages.py", "test_native_edges.py", "test_native_runtime.py", "test_native_properties.py"]
 TARGETS = [
-    ("Sources/tools/make_nemesis_package.py", PY_OPS, ["test_builder.py", "test_properties.py", "-k", "not adb and not uninstall and not install"], None),
+    ("Sources/tools/make_nemesis_package.py", PY_OPS, ["test_builder.py", "test_properties.py", "test_native_compat.py", "-k", "not adb and not uninstall and not install"], None),
+    ("Sources/tools/make_update_zip.py", PY_OPS, ["test_native_update.py", "-k", "tool"], None),
+    *[(f"Sources/native/{name}.c", C_OPS, UPDATE_TESTS, None) for name in ("meta", "update")],
     ("Sources/native/util.c", WRAP_OPS, ["test_mount_wrapper.py"], "static const char wrap[]"),
     ("Sources/packages/adb-tcp/scripts/common.sh", SHELL_OPS, HOOK_TESTS + ["test_properties.py"], None),
     ("Sources/packages/adb-tcp/scripts/post.sh", SHELL_OPS, HOOK_TESTS, None),
@@ -140,6 +150,20 @@ def generate(only):
                         "new": changed,
                         "tests": tests,
                     }
+
+
+def changed_lines(diff_text: str) -> set:
+    """The (file, line) pairs a `git diff -U0` added or changed."""
+    keep = set()
+    current = None
+    for raw in diff_text.splitlines():
+        if raw.startswith("+++ "):
+            current = raw[4:].strip()[2:] if raw[4:].startswith("b/") else None
+        hunk = re.match(r"@@ -\S+ \+(\d+)(?:,(\d+))? @@", raw)
+        if hunk and current:
+            start, count = int(hunk.group(1)), int(hunk.group(2) or 1)
+            keep.update((current, line) for line in range(start, start + count))
+    return keep
 
 
 def copy_repo(dest: Path) -> None:
@@ -241,8 +265,12 @@ def main() -> int:
     ap.add_argument("--json", type=Path, default=None)
     ap.add_argument("--retest", type=Path, action="append", default=[], help="only the survivors in this results file")
     ap.add_argument("--tests", nargs="+", default=None, help="run these test files instead of the usual ones")
+    ap.add_argument("--diff", type=Path, default=None, help="only the lines this `git diff -U0` output added or changed")
     args = ap.parse_args()
     mutants = list(generate(args.only))
+    if args.diff:
+        keep_lines = changed_lines(args.diff.read_text(encoding="utf-8", errors="replace"))
+        mutants = [m for m in mutants if (m["file"], m["line"]) in keep_lines]
     if args.retest:
         # A survivor already passed the usual tests, so only new tests can catch it.
         keep = set()

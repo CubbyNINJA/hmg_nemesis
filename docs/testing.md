@@ -125,12 +125,15 @@ export NEMESIS_REQUIRE_NATIVE=1 NEMESIS_TEST_SH=/usr/bin/mksh
 python3 -B Sources/tests/unit/mutate.py --only make_nemesis_package   # one target, a few seconds
 python3 -B Sources/tests/unit/mutate.py --only scripts/ --jobs 3 --json hooks.json
 python3 -B Sources/tests/unit/mutate.py --only Sources/native/ini.c --jobs 3 --json ini.json
+git diff -U0 main -- Sources/native > changed.diff
+python3 -B Sources/tests/unit/mutate.py --only Sources/native/ini.c --diff changed.diff --jobs 3   # only what you changed
 ```
 
 | Option | Meaning |
 |---|---|
 | `--only TEXT` | Only targets whose path contains `TEXT`. |
 | `--jobs N` | Mutants to run at once. The default is 4. |
+| `--diff FILE` | Only the lines that a `git diff -U0` saved in `FILE` added or changed. |
 | `--json FILE` | Writes every result to `FILE`, once the run finishes. |
 
 Each mutant prints a line as it finishes, then the run ends with a total and every survivor:

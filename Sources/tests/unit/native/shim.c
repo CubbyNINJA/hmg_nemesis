@@ -82,6 +82,27 @@ int shim_chown(const char *path, uid_t owner, gid_t group) {
     return access(TEST_ROOT "/chown_fails", F_OK) == 0 ? -1 : 0;
 }
 
+/* stop_daemons() kills every NEMESIS daemon on the machine. On a unit that is right. Here it would
+ * also hit the daemons of another test run, so a process of another fake unit is left alone. */
+int shim_kill(pid_t pid, int sig) {
+    char path[64], buf[1024];
+    int fd;
+    ssize_t n;
+    if (pid > 0 && sig == SIGKILL) {
+        snprintf(path, sizeof(path), "/proc/%d/cmdline", (int)pid);
+        fd = open(path, O_RDONLY);
+        if (fd >= 0) {
+            n = read(fd, buf, sizeof(buf) - 1);
+            close(fd);
+            if (n > 0) {
+                buf[n] = 0;
+                if (strstr(buf, "nemesis") && !strstr(buf, TEST_ROOT "/")) return 0;
+            }
+        }
+    }
+    return kill(pid, sig);
+}
+
 /* Command strings hold absolute unit paths, so those move under TEST_ROOT too. */
 static char *rewrite(const char *text) {
     static const char *const from[] = { "/system/bin/", "/system/xbin/" };
