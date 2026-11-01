@@ -146,9 +146,15 @@ def test_svcmgr_gives_up_after_five_rapid_deaths(nem):
 def test_svcmgr_restarts_a_service_that_died(nem):
     install_service(nem, mode="restart")
     nem.daemon("svcmgr")
+    assert wait_for(lambda: len(status(nem).split("|")) > 3 and status(nem).split("|")[3] != "0", 10)
     pid = status(nem).split("|")[3]
     os.kill(int(pid), 9)
-    assert wait_for(lambda: status(nem).split("|")[2:] and status(nem).split("|")[3] not in ("0", pid), 10)
+
+    def restarted():
+        fields = status(nem).split("|")
+        return len(fields) > 3 and fields[3] not in ("0", pid)
+
+    assert wait_for(restarted, 10)
 
 
 def test_svcmgr_does_not_restart_a_background_service(nem):
@@ -184,7 +190,6 @@ def test_second_watchdog_does_not_replace_the_first(nem):
     assert "already running" in nem.log()
 
 
-@known_bug("G6", ".fails survives uninstall, so a reinstalled package stays disabled")
 def test_reinstall_clears_the_failed_state(nem):
     install_service(nem, script="exit 1\n", mode="restart")
     (nem.root / "data/nemesis/pids/my.tool+d.fails").write_text("5\n")
@@ -317,15 +322,37 @@ def test_install_with_android_down_installs_without_a_dialog(nem):
     assert "my.tool|" in nem.db()
 
 
-def test_d2_installed_package_with_android_up_says_uninstall_first(nem):
-    target = nem.package(log_hooks=False, files={"v": "1"})
-    nem.run("install", target)
-    nem.answer_dialogs("ok")
-    nem.stick("[nemesis]\ntype=install\npath=p.zip\n", {"p.zip": nem.package(log_hooks=False, files={"v": "2"}).read_bytes()})
+@pytest.mark.parametrize("answer,version", [("yes", "2"), ("no", "1")])
+def test_d2_installed_package_with_android_up_asks_before_replacing(nem, answer, version):
+    """Given an installed package and a newer copy on a stick, with Android up (04 section 2)
+    When the user answers the dialog
+    Then yes replaces it and no leaves it alone
+    """
+    nem.run("install", nem.package(log_hooks=False, files={"v": "1"}))
+    nem.answer_dialogs(answer)
+    nem.stick("[nemesis]\ntype=install\npath=p.zip\n", {"p.zip": nem.package(log_hooks=False, files={"v": "2"}, name="u.zip").read_bytes()})
     run_handler(nem)
     handled(nem)
-    assert "nemesis_mode uninstall_first" in nem.calls()
-    assert (nem.app() / "v").read_text() == "1"
+    assert "nemesis_mode confirm_reinstall" in nem.calls()
+    assert (nem.app() / "v").read_text() == version
+
+
+def test_a_stick_without_the_emergency_file_waits_for_android(nem):
+    """Given Android down and a stick with no NEMESIS.emergency (05 section 2)
+    When the handler sees it, and then Android comes up
+    Then nothing runs until Android is up, and then the user is asked
+    """
+    nem.android(up=False)
+    nem.answer_dialogs("yes")
+    nem.stick(EXECUTE, {"NEMESIS.sh": marker_script(nem)}, emergency=False)
+    run_handler(nem)
+    assert wait_for(lambda: "waiting for Android" in nem.log(), 10)
+    time.sleep(2)
+    assert not (nem.root / "ran").exists()
+    assert "am " not in nem.calls()
+    nem.android(up=True)
+    assert wait_for(lambda: (nem.root / "ran").exists(), 15)
+    assert "nemesis_mode confirm_execute" in nem.calls()
 
 
 def test_d2_installed_package_with_android_down_updates_automatically(nem):
@@ -613,7 +640,7 @@ def test_log_logcat_and_dmesg_reach_the_system_tools(nem):
 def test_no_arguments_and_unknown_commands_print_usage(nem):
     assert nem.run().returncode == 1
     res = nem.run("dance")
-    assert res.returncode == 1 and "nemesis install [--update] <zip>" in res.stderr
+    assert res.returncode == 1 and "nemesis install [--update]" in res.stderr
 
 
 def test_ping_fails_without_a_watchdog(nem):

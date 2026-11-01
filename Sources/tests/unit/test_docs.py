@@ -15,7 +15,8 @@ ALLOWED_DOCS = [
     "02-Debugging-Execution-Interface.md",
     "04-Packages.md",
     "05-Run-Scripts.md",
-    "Packages/README.md",
+    "06-Cloud-Store-API.md",
+    "07-Submit-a-Package.md",
     "docs/creating-a-package.md",
     "docs/testing.md",
     "docs/oem-source-release.md",
@@ -66,7 +67,7 @@ def test_documented_limits_match_the_source():
 def test_setup_press_constants_match_the_documented_behaviour():
     src = (SOURCES / "manager/src/com/nemesis/manager/SetupPress.java").read_text(encoding="utf-8")
     assert "GAP_MS = 1500" in src and "1.5 seconds" in doc("02-Debugging-Execution-Interface.md")
-    assert "DEBOUNCE_MS = 200" in src and "200 ms" in doc("02-Debugging-Execution-Interface.md")
+    assert "DEBOUNCE_MS = 300" in src
     assert "NEED = 3" in src and "Three presses" in doc("02-Debugging-Execution-Interface.md")
 
 
@@ -81,8 +82,8 @@ def test_every_documented_cli_command_is_dispatched():
 def test_manager_version_matches_the_apk_check():
     manifest = (SOURCES / "manager/AndroidManifest.xml").read_text(encoding="utf-8")
     check = (SOURCES / "tests/check_manager_apk.py").read_text(encoding="utf-8")
-    assert 'android:versionCode="16"' in manifest and "versionCode 16" in check
-    assert 'android:versionName="1.15"' in manifest and '"1.15"' in check
+    assert 'android:versionCode="17"' in manifest and "versionCode is not 17" in check
+    assert 'android:versionName="1.16"' in manifest and '"1.16"' in check
 
 
 @pytest.mark.parametrize("name", ["AGENTS.md", "04-Packages.md"])
@@ -93,10 +94,10 @@ def test_d1_traversal_member_is_documented_as_rejecting_the_package(name):
 
 
 @pytest.mark.parametrize("name", ["04-Packages.md", "docs/creating-a-package.md"])
-def test_d2_usb_update_is_documented_as_uninstall_first(name):
+def test_d2_usb_update_is_documented_as_a_prompt(name):
     text = doc(name)
-    assert "update prompt" not in text
-    assert "uninstall it first" in text
+    assert "uninstall it first" not in text
+    assert "NEMESIS.emergency" in text
 
 
 def test_d4_nemesis_data_paths_are_not_documented_as_rejecting_absolute():

@@ -359,7 +359,7 @@ def test_an_app_without_a_kind_is_not_treated_as_an_apk(nem):
     assert "pm uninstall" not in nem.calls()
 
 
-@pytest.mark.parametrize("bad", ["a'b", "a\rb"], ids=["quote", "carriage-return"])
+@pytest.mark.parametrize("bad", ["a'b"], ids=["quote"])
 def test_launch_refuses_a_name_that_could_break_shell_quoting(nem, bad):
     """Given a component holding a character that could break the quoting
     When the package is launched
@@ -369,6 +369,16 @@ def test_launch_refuses_a_name_that_could_break_shell_quoting(nem, bad):
     res = nem.run("pkg-launch", "my.tool")
     assert res.returncode == 1 and "activity launch failed" in res.stderr
     assert "am start" not in nem.calls()
+
+
+def test_a_carriage_return_never_reaches_am(nem):
+    """Given a component with a bare carriage return, which ends a manifest line
+    When the package is launched
+    Then am never receives one
+    """
+    install(nem, sections="[app.0]\nkind=sh\npath=bin/x\ncomponent=a\rb/.X\n", files={"bin/x": "exit 0\n"})
+    nem.run("pkg-launch", "my.tool")
+    assert "\r" not in nem.calls()
 
 
 def test_a_successful_apk_install_does_not_check_for_a_signer_conflict(nem):
@@ -447,7 +457,7 @@ def test_damaged_lines_in_the_package_database_are_ignored(nem):
     path = nem.root / "data/nemesis/packages.db"
     path.write_text(path.read_text() + "# comment\n\none\ntwo|x\nthree|x|0\nreal.pkg|Real|0|app\n")
     listed = nem.run("pkg-list").stdout.splitlines()
-    assert "real.pkg|Real|0|app" in listed
+    assert any(line.startswith("real.pkg|Real|0|app") for line in listed)
     assert not any(line.startswith(("#", "one", "two", "three")) or not line for line in listed)
 
 

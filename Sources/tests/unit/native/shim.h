@@ -50,6 +50,9 @@
 #undef SM_PIDFILE
 #undef SU_SOCK_DEV
 #undef SU_SOCK_DATA
+#undef CACERTS_DIR
+#undef OWNED_CACERTS
+#undef UPDATE_DIR
 
 #define NEMESIS_ROOT TEST_ROOT "/data/nemesis"
 #define NEMESIS_APPS TEST_ROOT "/data/nemesis/apps"
@@ -76,6 +79,9 @@
 #define SM_PIDFILE TEST_ROOT "/data/nemesis/svcmgr.pid"
 #define SU_SOCK_DEV TEST_ROOT "/dev/nemesis.sock"
 #define SU_SOCK_DATA TEST_ROOT "/data/nemesis/root.sock"
+#define CACERTS_DIR TEST_ROOT "/system/etc/security/cacerts"
+#define OWNED_CACERTS TEST_ROOT "/data/nemesis/owned-cacerts"
+#define UPDATE_DIR TEST_ROOT "/data/nemesis/update"
 
 const char *shim_path(const char *path);
 uid_t shim_geteuid(void);

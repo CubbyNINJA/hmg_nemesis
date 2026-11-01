@@ -87,7 +87,6 @@ def test_gitattributes_pins_lf_for_unit_files():
     assert "NEMESIS.* text eol=lf" in text
 
 
-@known_bug("G18", "builder never validates the id")
 @pytest.mark.parametrize("bad", ["../../traversal", ".hidden", "a b", "x" * 65])
 def test_invalid_id_is_refused(pkg, tmp_path, bad):
     (pkg / "NEMESIS.data").write_text(f"[nemesis]\nid={bad}\n")

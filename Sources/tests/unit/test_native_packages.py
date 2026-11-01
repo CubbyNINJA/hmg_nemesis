@@ -13,6 +13,7 @@ from helpers import PACKAGES, REPO, SOURCES, known_bug
 from native_unit import executable, make_zip, wait_for
 
 GOOD = "[nemesis]\nid=my.tool\nname=My Tool\ntypes=a,b\n"
+STOCK_QB = b"#!/system/bin/sh\n\nSELECT_FUNC=$1\nEXTRA_ARG=$2\n"
 
 
 def info(nem, members):
@@ -25,7 +26,8 @@ def info(nem, members):
 def test_pkg_info_reports_the_documented_fields(nem):
     res = info(nem, {"NEMESIS.data": GOOD})
     assert res.returncode == 0
-    assert res.stdout == "id=my.tool\nname=My Tool\ntypes=a,b\ninstalled=0\nlocked=0\n"
+    for line in ("id=my.tool", "name=My Tool", "types=a,b", "installed=0", "locked=0", "compat=full"):
+        assert f"{line}\n" in res.stdout
 
 
 def test_name_defaults_to_the_id(nem):
@@ -53,13 +55,11 @@ def test_utf8_bom_is_tolerated(nem):
     assert info(nem, {"NEMESIS.data": b"\xef\xbb\xbf" + GOOD.encode()}).returncode == 0
 
 
-@known_bug("G16", "text past 1023 characters parses as a new line")
 def test_a_long_comment_cannot_inject_a_key(nem):
     text = "[nemesis]\n#" + "x" * 1022 + "id=injected\nid=my.tool\n"
     assert "id=my.tool\n" in info(nem, {"NEMESIS.data": text}).stdout
 
 
-@known_bug("G15", "manifest read truncates silently at 8191 bytes")
 def test_a_large_manifest_keeps_its_id(nem):
     text = "[nemesis]\n" + "# pad\n" * 2000 + "id=my.tool\n"
     assert info(nem, {"NEMESIS.data": text}).returncode == 0
@@ -367,7 +367,21 @@ def test_seeded_usb_handler_matches_the_shipped_manifest(nem):
 def test_pkg_info_reports_an_installed_package(nem):
     target = nem.package()
     nem.run("install", target)
-    assert "installed=1\nlocked=0" in nem.run("pkg-info", target).stdout
+    res_text = nem.run("pkg-info", target).stdout
+    assert "installed=1\n" in res_text and "locked=0\n" in res_text
+
+
+@known_bug("G23", "install accepts an id starting with - but uninstall reads it as an option and refuses")
+def test_a_package_install_accepts_can_be_uninstalled_even_with_a_leading_dash(nem):
+    """Given a zip whose id starts with a dash (04-Packages.md allows it, the builder refuses it)
+    When it is installed and then uninstalled by id
+    Then install refuses it, or uninstall removes it (Sources/native/pkg.c cmd_uninstall)
+    """
+    members = {"NEMESIS.data": "[nemesis]\nid=-x\n"}
+    if nem.run("install", make_zip(nem.workdir / "p.zip", members)).returncode != 0:
+        return
+    assert nem.run("uninstall", "-x").returncode == 0
+    assert not nem.app("-x").exists()
 
 
 def test_uninstall_runs_hooks_and_removes_everything(nem):
@@ -410,7 +424,6 @@ def test_a_package_name_cannot_lock_the_package(nem):
     assert "locked" not in res.stderr
 
 
-@known_bug("G4", "preuninstall failure is ignored and the tree is deleted")
 def test_a_failed_preuninstall_keeps_the_package(nem):
     nem.run("install", nem.package(files={"scripts/preun.sh": "exit 4\n"}))
     res = nem.run("uninstall", "my.tool")
@@ -637,7 +650,7 @@ def test_wipe_needs_confirm(nem):
 
 
 def _install_system_files(nem):
-    stock = (SOURCES / "tests/qb_runtime.stock.sh").read_bytes().replace(b"\r\n", b"\n")
+    stock = STOCK_QB
     hook = (SOURCES / "boot/qb_hook.sh").read_bytes().replace(b"\r\n", b"\n")
     (nem.root / "system/etc/qb_runtime.sh").write_bytes(stock + b"\n" + hook + b"\n")
     (nem.root / "system/etc/install-recovery.sh").write_text("x")
@@ -668,19 +681,17 @@ def test_wipe_removes_the_locked_package_too(nem):
 
 
 def test_wipe_leaves_a_stock_quickboot_script_alone(nem):
-    stock = (SOURCES / "tests/qb_runtime.stock.sh").read_bytes()
+    stock = STOCK_QB
     (nem.root / "system/etc/qb_runtime.sh").write_bytes(stock)
     nem.run("wipe", "--confirm")
     assert (nem.root / "system/etc/qb_runtime.sh").read_bytes() == stock
 
 
-@known_bug("G10", "log_msg recreates /data/nemesis after it is removed")
 def test_wipe_leaves_no_data_directory_behind(nem):
     nem.run("wipe", "--confirm")
     assert not (nem.root / "data/nemesis").exists()
 
 
-@known_bug("G10", "wipe does not stop the running daemons")
 def test_wipe_stops_the_daemons(nem):
     nem.run("watchdog")
     assert wait_for((nem.root / "data/nemesis/watchdog.pid").exists)

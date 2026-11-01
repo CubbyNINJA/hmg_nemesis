@@ -29,14 +29,14 @@ anti-theft/key systems, no data exfiltration) applies to every package and scrip
 Documentation scope:
 
 - The canonical docs for work in this repo are `02-Debugging-Execution-Interface.md`,
-  `04-Packages.md`, `05-Run-Scripts.md`, `README.md`, `SCOPE.md`, `Packages/README.md`,
+  `04-Packages.md`, `05-Run-Scripts.md`, `06-Cloud-Store-API.md`, `07-Submit-a-Package.md`, `README.md`, `SCOPE.md`,
   `docs/creating-a-package.md`, `docs/testing.md`, `docs/oem-source-release.md`,
   `docs/source-release-notes.md`, and `Sources/usb_bundle/README.md` + `DEVICE_TEST.md`.
 - `01-DSP-OTA-troubleShooter.md` and `03-Install-and-Uninstall.md` cover the install path and are
   not part of this checkout. They are out of scope for package work — do not link to them in new
   docs. Nothing in package authoring depends on them.
 - Use standard Android system-administration terminology. The working set for nearly all tasks is
-  package structure, runtime automation scripts, and UI layouts under `Sources/` and `Packages/`.
+  package structure, runtime automation scripts, and UI layouts under `Sources/`.
 
 ---
 
@@ -52,11 +52,6 @@ hmg_nemesis/
 ├── 02-Debugging-Execution-Interface.md   ← runtime: CLI, Manager, sockets, boot
 ├── 04-Packages.md                        ← package format reference (INI, hooks, apps, services)
 ├── 05-Run-Scripts.md                     ← USB NEMESIS.data / NEMESIS.sh run-script reference
-├── Packages/                    ← end-user catalog of prebuilt .zip packages
-│   ├── README.md                ← catalog table + rebuild instructions
-│   ├── Enable ADB.zip
-│   ├── Enable Wireless Features.zip
-│   └── Turn-by-Turn Guidance for Phone Projection.zip
 ├── docs/
 │   ├── creating-a-package.md            ← step-by-step package authoring guide
 │   ├── testing.md                       ← how to run tests, coverage, and mutation testing
@@ -304,12 +299,6 @@ Exit 0 → success dialog; non-zero → failure dialog.
 | `usb-stick-execute` / `usb-stick-install` / `usb-stick-open` | Complete USB stick roots (descriptor + payload) for each type. |
 | `usb-stick-adb` / `usb-stick-wireless` / `usb-stick-carplay` / `usb-stick-voicehandler-vr-gates` / `usb-stick-recover-buildprop` | Real deployment sticks for specific packages/procedures. |
 
-### `Packages/` (end-user catalog)
-
-Prebuilt zips whose sources live in `Sources/packages/`. If you change a package source, rebuild
-its catalog zip and update the catalog table in `Packages/README.md` (name, source link,
-description, compatibility). Community entries link out; do not vendor their sources.
-
 ---
 
 ## 7. Building the platform itself (CLI + Manager APK)
@@ -342,7 +331,7 @@ make -C Sources/manager keystore   # one-time self-signed key (alias/pass: nemes
 
 ### Top-level (`Sources/Makefile`)
 
-Targets: `all native manager packages examples troubleshooter test-emu test-hooks clean`.
+Targets: `all native manager packages examples troubleshooter test-emu test-hooks test-meta clean`. `test-emu` needs a QEMU lab that is not published.
 Note the known inconsistencies from §2 (missing `voicehandler-vr-gates`/`busybox` sources,
 hardcoded paths). Prefer invoking sub-makes and the builder script directly.
 
@@ -354,14 +343,12 @@ hardcoded paths). Prefer invoking sub-makes and the builder script directly.
 
 | Test | What it does |
 |------|--------------|
-| `Sources/tests/unit/` | Host pytest suite: builder, manifests, shipped scripts, package hooks, mount wrapper, catalog zips, docs against source. Run with `python -m pytest Sources/tests/unit`. See §10. |
+| `Sources/tests/unit/` | Host pytest suite: builder, manifests, shipped scripts, package hooks, mount wrapper, native CLI, docs against source. Run with `python -m pytest Sources/tests/unit`. See §10. |
 | `Sources/tests/check_manager_apk.py` | Host-only checks of `manager/NEMESIS.apk` (zip contents, dex, manifest via `aapt`). No guest needed. |
-| `Sources/tests/emu_nemesis_flow.py` (+ `.sh`) | Console-only QEMU test of CLI + USB Handler. Simulates USB insert as an entry in `/proc/mounts` + `NEMESIS.data` on a bind mount (`/data/local/tmp/usb-sim`). Requires the QEMU image at `/home/xwtk/EV6_260507/emulator` and virtio console on TCP 4446. |
-| `Sources/tests/guest.py` | `Guest` helper: persistent virtio-console session (TCP 4446), replaces interactive mksh with a plain eval loop. |
 | `Sources/tests/setup_press_test.py` | Faceplate/steering-button (triple-press) logic tests. |
-| `Sources/tests/pkg_live_snapshot.sh`, `pkg_carplay_session.sh` | Backup/restore (live-snapshot) pattern checks. |
-| `Sources/tests/qb_runtime.stock.sh` | Stock QuickBoot runtime reference for the boot hook. |
-| `make -C Sources test-emu` / `test-hooks` | Aggregate runners. |
+| `Sources/tests/pkg_live_snapshot.sh` | Backup/restore (live-snapshot) pattern checks. |
+| `meta_host_test.c`, `store_logic_test.py` | Upstream's descriptor parser and Package Store logic checks. See `Sources/tests/README.md`. |
+| `make -C Sources test-meta` / `test-hooks` | Aggregate runners. |
 
 The host suite covers shipped packages, but a new package has no harness of its own. Validation is: build the zip,
 `nemesis pkg-info` it, install on a unit (or QEMU), then `nemesis pkg-list`,
@@ -407,7 +394,7 @@ The host suite covers shipped packages, but a new package has no harness of its 
    restore in `preuninstall`, delete backup only after verified restore.
 6. `python3 Sources/tools/make_nemesis_package.py Sources/packages/<my-tool> -o <id>.zip`.
 7. Verify: `nemesis pkg-info <zip>` → install → `pkg-list` / `service status` / `log dump`.
-8. If it belongs in the catalog: add the zip to `Packages/` and a row to `Packages/README.md`.
+8. To list it in the Package Store, follow `07-Submit-a-Package.md`.
 
 ### Quick reference — minimal working package
 
@@ -477,10 +464,10 @@ def test_missing_manifest_is_refused(tmp_path):
 
 | Behaviour | Location | Run with | Needs |
 |-----------|----------|----------|-------|
-| Builder, manifests, shipped scripts, package hooks, mount wrapper, catalog zips, docs against source | `Sources/tests/unit/test_*.py` | `python -m pytest Sources/tests/unit` | Python 3.8+, pytest, a POSIX `sh` |
+| Builder, manifests, shipped scripts, package hooks, mount wrapper, docs against source | `Sources/tests/unit/test_*.py` | `python -m pytest Sources/tests/unit` | Python 3.8+, pytest, a POSIX `sh` |
 | Manager button logic | `Sources/tests/src/.../SetupPressRun.java` | `python3 Sources/tests/setup_press_test.py` | JDK that accepts `-source 1.7` |
 | Package hooks in a private root | `Sources/tests/pkg_live_snapshot.sh` | `bash Sources/tests/pkg_live_snapshot.sh` | Linux with user namespaces |
-| CLI and USB Handler | `Sources/tests/emu_nemesis_flow.py` | `python3 Sources/tests/emu_nemesis_flow.py` | The QEMU image at the path in §8 (not shipped) |
+| CLI and USB Handler | `Sources/tests/unit/test_native_*.py` | `python -m pytest Sources/tests/unit` | Linux, `gcc`, zlib headers |
 | Only provable on hardware | `Sources/usb_bundle/DEVICE_TEST.md` | By hand | A head unit you own |
 
 Prefer the cheapest row that can prove the behaviour. If you cannot run the row that applies, say so
@@ -514,6 +501,5 @@ bug, take the next number after the highest `known_bug` in the tests.
 - [ ] Docs describe the new behaviour, and only link to allowed documents (§1).
 - [ ] Scripts and manifests are LF (§9). On Windows, `core.autocrlf` can turn them into CRLF, and the
       builder ships them as they are.
-- [ ] A changed package source that has a catalog zip has it rebuilt, and its `Packages/README.md` row updated (§6).
 - [ ] Behaviour that needs hardware is listed as tested on a real unit, or plainly as not tested.
 

@@ -164,10 +164,7 @@ Mutation testing is not part of the normal test run, because of how long it take
 | `python3 Sources/tests/setup_press_test.py` | The Manager's triple-press logic | A JDK that accepts `-source 1.7`; JDK 17 works |
 | `python3 Sources/tests/check_manager_apk.py` | The built `NEMESIS.apk` | A built APK and `aapt` |
 
-These cannot run from a plain checkout, because the files they need are not shipped:
-
-- `Sources/tests/emu_nemesis_flow.py` needs a QEMU image of the unit.
-- `Sources/tests/pkg_carplay_session.sh` needs stock firmware files.
+Upstream's emulator tests are not published, because they depend on a firmware image.
 
 Behaviour that only hardware can prove is listed in [DEVICE_TEST.md](../Sources/usb_bundle/DEVICE_TEST.md).
 

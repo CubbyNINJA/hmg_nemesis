@@ -139,7 +139,8 @@ def test_one_unsafe_member_rejects_the_whole_package(nem, tree, bad):
 
 
 @settings(max_examples=25, **COMMON)
-@given(st.lists(WORD.filter(id_is_valid), min_size=1, max_size=5, unique=True), st.data())
+# Ids starting with a dash have their own scenario in test_native_packages.py.
+@given(st.lists(WORD.filter(lambda v: id_is_valid(v) and v[0] != "-"), min_size=1, max_size=5, unique=True), st.data())
 def test_the_package_list_tracks_installs_and_uninstalls(nem, ids, data):
     """Given several packages
     When they are installed and some are uninstalled
@@ -155,7 +156,7 @@ def test_the_package_list_tracks_installs_and_uninstalls(nem, ids, data):
     # The locked USB handler is seeded on every unit, so it is always listed too.
     listed = [line for line in nem.run("pkg-list").stdout.splitlines() if not line.startswith("usb-handler|")]
     expected = {f"{i}|N {i}|0|application" for i in ids if i not in removed}
-    assert set(listed) == expected
+    assert {"|".join(line.split("|")[:4]) for line in listed if not line.startswith("nemesis.update-monitor|")} == expected
 
 
 @settings(max_examples=10, **COMMON)

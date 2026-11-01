@@ -15,7 +15,7 @@ from pathlib import Path
 from helpers import NATIVE
 
 HERE = Path(__file__).resolve().parent
-SOURCES = ["main.c", "util.c", "ini.c", "zip.c", "pkg.c", "svc.c", "usb.c", "su.c"]
+SOURCES = ["main.c", "util.c", "ini.c", "meta.c", "update.c", "zip.c", "pkg.c", "svc.c", "usb.c", "su.c"]
 CC = os.environ.get("CC", "gcc")
 
 
@@ -78,6 +78,7 @@ class FakeUnit:
         self.android(up=True)
         executable(self.bin("am"), f'echo "am $*" >> "{self.root}/calls"\n')
         executable(self.bin("monkey"), f'echo "monkey $*" >> "{self.root}/calls"\n')
+        executable(self.bin("reboot"), f'echo "reboot $*" >> "{self.root}/calls"\n')
         self.pm_script('echo Success\n')
 
     @property
@@ -160,7 +161,8 @@ class FakeUnit:
         target = self.root / "data" / "nemesis" / "nemesis.log"
         return target.read_text(errors="replace") if target.exists() else ""
 
-    def stick(self, descriptor: str, files: dict = None, mount: str = "storage/usb0") -> Path:
+    def stick(self, descriptor: str, files: dict = None, mount: str = "storage/usb0", emergency: bool = None) -> Path:
+        """A stick is a recovery stick by default when Android is down, as it must be to act."""
         usb = self.root / mount
         usb.mkdir(parents=True, exist_ok=True)
         for name, data in (files or {}).items():
@@ -168,6 +170,8 @@ class FakeUnit:
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_bytes(data if isinstance(data, bytes) else data.encode())
         (usb / "NEMESIS.data").write_text(descriptor)
+        if emergency if emergency is not None else self.prop("sys.boot_completed") == "0":
+            (usb / "NEMESIS.emergency").write_text("")
         # usb0_mounted() matches the literal unit path, so this names the mount as the unit does.
         (self.root / "proc_mounts").write_text(f"/dev/block/sda1 /{mount} vfat rw 0 0\n")
         return usb

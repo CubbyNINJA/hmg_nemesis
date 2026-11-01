@@ -516,6 +516,7 @@ uninstall_wireless
 assert_cmp /system/onebin/crlf_us/featurexml.cfg "$FAKE/orig/E/featurexml.crlf.cfg"
 echo "scenario E ok"
 
+if [ -d "$TOGGLE_PKG" ]; then
 # adb.toggle: enable/disable on demand through adbctl.sh (no reboot, no install-time change).
 toggle_ctl() {
     local out="$FAKE/ctl.out"
@@ -588,6 +589,9 @@ assert_cmp /system/build.prop "$FAKE/orig/H/after_tcp"
 uninstall_adb
 assert_cmp /system/build.prop "$FAKE/orig/H/build.prop"
 echo "scenario toggle ok"
+else
+    echo "scenario toggle skipped: $TOGGLE_PKG is not in this checkout"
+fi
 
 # preinstall fails when build.prop is missing
 rm -f /system/build.prop

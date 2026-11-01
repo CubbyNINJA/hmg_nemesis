@@ -59,7 +59,7 @@ def test_package_id_is_valid(pkg):
 @pytest.mark.parametrize("pkg", PACKAGE_DIRS, **by_name)
 def test_recommended_metadata_is_present(pkg):
     meta = manifest(pkg)["nemesis"]
-    assert meta.get("name") and meta.get("version") and meta.get("types")
+    assert meta.get("name") and meta.get("version") and (meta.get("type") or meta.get("types"))
 
 
 @pytest.mark.parametrize("pkg", PACKAGE_DIRS, **by_name)
@@ -89,6 +89,9 @@ def test_hello_examples_differ_only_by_service_mode():
     two = manifest(EXAMPLES / "package-hello-v2")
     assert one["service.0"].pop("mode") == "restart"
     assert two["service.0"].pop("mode") == "background"
+    for meta in (one["nemesis"], two["nemesis"]):
+        meta.pop("package-version")
+        meta.pop("short-desc")
     assert one == two
 
 
@@ -158,6 +161,8 @@ def c_string_block(source: str, name: str) -> str:
 def test_embedded_usb_handler_matches_the_package_source():
     source = (NATIVE / "pkg.c").read_text(encoding="utf-8")
     pkg = PACKAGES / "usb-handler"
-    assert c_string_block(source, "USB_HANDLER_META") == (pkg / "NEMESIS.data").read_text(encoding="utf-8")
+    version = re.search(r'#define NEMESIS_VERSION "([^"]+)"', (NATIVE / "nemesis.h").read_text(encoding="utf-8")).group(1)
+    embedded = c_string_block(source, "USB_HANDLER_META").replace("package-version=\n", f"package-version={version}\n")
+    assert embedded == (pkg / "NEMESIS.data").read_text(encoding="utf-8")
     shipped = (pkg / "svc" / "usb-handler.sh").read_text(encoding="utf-8")
     assert c_string_block(source, "USB_HANDLER_SH").split() == shipped.split()

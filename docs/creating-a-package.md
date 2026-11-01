@@ -26,8 +26,10 @@ file. Looking at the real manifests is the fastest way to learn the format.
 | [`examples/package-hello`](../Sources/examples/package-hello) | `hello.tool` | application, service | Minimal template: one `sh` app, one `sh` service with `mode=restart`, and all four lifecycle hooks. |
 | [`examples/package-hello-v2`](../Sources/examples/package-hello-v2) | `hello.tool` | application, service | Same as above but the service uses `mode=background` (start once, no restart). |
 
-The prebuilt catalog zips for end users live in
-[`Packages/`](../Packages/README.md).
+Prebuilt packages for end users are in the
+[NEMESIS Package Store](https://xwtk.cloud/services/nemesis#package-store). To list yours there, see
+[Submit a package](../07-Submit-a-Package.md). The `version=1.1` descriptor keys are in
+[04 - Packages](../04-Packages.md).
 
 ---
 
@@ -186,8 +188,9 @@ path=packages/my.tool.zip
 
 `path` must be relative — no leading `/`, no `..`, no shell metacharacters.
 Insert the stick; confirm the prompt if Android is up. If the id already exists
-and Android is up, Manager tells you to uninstall it first; if Android is down,
-it updates without a dialog.
+and Android is up, Manager asks before replacing it. If Android is down, the stick
+waits for Android unless its root also has `NEMESIS.emergency`, and then it updates
+without a dialog.
 
 **CLI:**
 

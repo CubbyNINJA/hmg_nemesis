@@ -130,7 +130,7 @@ exit 0
 
 **Install a zip:** `type=install` and `path=packages/foo.zip` ([04](04-Packages.md)).
 
-**Update NEMESIS:** `type=update` and `path=` the update zip ([03](03-Install-and-Uninstall.md)).
+**Update NEMESIS:** `type=update` and `path=` the update zip.
 
 **Package list for the Store:** `type=list` ([04](04-Packages.md)).
 
