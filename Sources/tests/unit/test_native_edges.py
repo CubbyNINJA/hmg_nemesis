@@ -6,15 +6,17 @@ from __future__ import annotations
 
 import os
 import struct
+import subprocess
 import time
 import zipfile
 
 import pytest
 
-from native_unit import make_zip, wait_for
+from native_unit import executable, make_zip, wait_for
 
 SVC = "my.tool/d"
 GOOD = "[nemesis]\nid=my.tool\nname=My Tool\ntypes=a\n"
+EXECUTE = "[nemesis]\ntype=execute\npath=NEMESIS.sh\n"
 
 
 def install(nem, sections="", **kwargs):
@@ -666,3 +668,285 @@ def test_wipe_reports_a_system_file_it_could_not_remove(nem, rel, name):
     finally:
         nem.path(rel).chmod(0o755)
     assert res.returncode == 1 and "wipe incomplete" in res.stdout
+
+
+def test_wipe_removes_only_nemesis_entries_from_the_dalvik_cache(nem):
+    """Given a Dalvik cache with NEMESIS entries in either case, and another app's entry
+    When the unit is wiped
+    Then only the NEMESIS entries go
+    """
+    cache = nem.path("/data/dalvik-cache")
+    cache.mkdir(parents=True)
+    for name in ("system@app@NEMESIS.apk@classes.dex", "data@app@nemesis-x@classes.dex", "system@app@Other.apk@classes.dex"):
+        (cache / name).write_text("x")
+    nem.run("wipe", "--confirm")
+    assert sorted(p.name for p in cache.iterdir()) == ["system@app@Other.apk@classes.dex"]
+
+
+# --- Services must not touch the wrong process or identity (svc.c)
+
+
+def test_stopping_a_service_never_kills_the_process_a_stale_pidfile_names(nem):
+    """Given a pidfile whose pid now belongs to an unrelated process (02 section 5)
+    When the service is stopped
+    Then that process is left alone, and the stale pidfile is removed
+    """
+    service(nem)
+    nem.run("service", "stop", SVC)
+    stranger = subprocess.Popen(["sleep", "30"])
+    pidfile = nem.root / "data/nemesis/pids/my.tool+d"
+    try:
+        pidfile.write_text(f"{stranger.pid}\n")
+        assert nem.run("service", "stop", SVC).returncode == 0
+        time.sleep(0.5)
+        assert stranger.poll() is None, "an unrelated process was killed"
+        assert not pidfile.exists()
+    finally:
+        stranger.kill()
+        stranger.wait()
+
+
+def test_a_pidfile_with_no_start_time_still_identifies_the_service(nem):
+    """Given a running service whose pidfile holds only the pid
+    When its status is read
+    Then it matches by command line and reads as running
+    """
+    service(nem)
+    pidfile = nem.root / "data/nemesis/pids/my.tool+d"
+    pid = pidfile.read_text().split()[0]
+    pidfile.write_text(f"{pid}\n")
+    assert "running" in nem.run("service", "status", SVC).stdout
+
+
+def test_a_service_set_to_root_does_not_drop_privilege(nem):
+    """Given a service with uid=root (04 section 4)
+    When it starts
+    Then it does not switch to the system uid
+    """
+    section = "[service.0]\nname=d\npath=svc/d.sh\nmode=background\nuid=root\n"
+    assert nem.run("install", nem.package(sections=section, files={"svc/d.sh": "sleep 5\n"}, log_hooks=False)).returncode == 0
+    assert "running" in nem.run("service", "status", SVC).stdout
+    assert "uid 1000" not in nem.ids()
+
+
+def test_an_instance_service_falls_back_to_startservice(nem):
+    """Given an instance component that am cannot start as an activity
+    When it starts
+    Then am startservice is tried
+    """
+    executable(nem.bin("am"), f'echo "am $*" >> "{nem.root}/calls"\n[ "$1" = startservice ]\n')
+    service(nem, kind="instance", path="/com.a/.Svc")
+    assert wait_for(lambda: "am startservice -n /com.a/.Svc" in nem.calls(), 10)
+
+
+def test_an_instance_service_that_starts_does_not_also_start_as_a_service(nem):
+    """Given an instance component that am starts
+    When it starts
+    Then startservice is not tried
+    """
+    service(nem, kind="instance", path="/com.a/.Svc")
+    assert wait_for(lambda: "am start -n /com.a/.Svc" in nem.calls(), 10)
+    time.sleep(0.5)
+    assert "startservice" not in nem.calls()
+
+
+def test_svcmgr_still_restarts_script_services_while_android_is_down(nem):
+    """Given Android down, which matters only to instance services (04 section 4)
+    When a restart script service dies
+    Then svcmgr restarts it
+    """
+    nem.android(up=False)
+    marker = nem.root / "runs"
+    service(nem, mode="restart", script=f'echo x >> "{marker}"\nexit 0\n')
+    nem.daemon("svcmgr")
+    assert wait_for(lambda: marker.exists() and marker.read_text().count("x") >= 2, 15)
+
+
+def test_svcmgr_restores_a_missing_watchdog(nem):
+    """Given no watchdog running (02 section 5)
+    When svcmgr runs
+    Then it starts one, so the root channel comes back
+    """
+    assert nem.run("ping").returncode != 0
+    nem.daemon("svcmgr")
+    assert wait_for(lambda: nem.run("ping").returncode == 0, 15)
+
+
+def test_the_channel_daemon_survives_serving_a_client(nem):
+    """Given a running watchdog
+    When a client is served
+    Then the same process keeps running, because a forked worker did the work
+    """
+    start_channel(nem)
+    pid = (nem.root / "data/nemesis/watchdog.pid").read_text().split()[0]
+    assert nem.run("pkg-list", euid=1000).returncode == 0
+    time.sleep(0.3)
+    assert (nem.root / "data/nemesis/watchdog.pid").read_text().split()[0] == pid
+    assert os.path.exists(f"/proc/{pid}")
+
+
+# --- Each insertion is handled once (usb.c)
+
+
+@pytest.mark.parametrize(
+    "descriptor",
+    ["[nemesis]\nversion=1\n", "[nemesis]\ntype=dance\npath=a\n", "[nemesis]\ntype=execute\npath=../x\n", "[nemesis]\ntype=open\n"],
+    ids=["empty-type", "unknown-type", "bad-path", "open"],
+)
+def test_a_descriptor_is_not_handled_again_while_it_stays_inserted(nem, descriptor):
+    """Given a descriptor that is handled without running anything, with Android down
+    When the stick stays in place
+    Then the handler does not process it again
+    """
+    nem.android(up=False)
+    nem.stick(descriptor)
+    nem.daemon("usb-handler")
+    assert wait_for(lambda: "handled" in nem.session_log(), 15), nem.log()
+    time.sleep(5)
+    assert nem.session_log().count("handled") == 1
+
+
+def test_an_unreadable_descriptor_is_not_handled_again(nem):
+    """Given a descriptor that cannot be read
+    When the stick stays in place
+    Then the handler does not process it again
+    """
+    needs_non_root()
+    nem.android(up=False)
+    usb = nem.stick(EXECUTE)
+    (usb / "NEMESIS.data").chmod(0)
+    nem.daemon("usb-handler")
+    assert wait_for(lambda: "handled" in nem.session_log(), 15), nem.log()
+    time.sleep(4)
+    assert nem.session_log().count("handled") == 1
+
+
+# --- What launch and install do with odd manifests (pkg.c)
+
+
+@pytest.mark.parametrize(
+    "section",
+    ["[app.0]\nkind=sh\n", "[app.0]\nkind=other\npath=bin/x\n", "[app.0]\npath=bin/x\n", "[app.0]\nkind=sh\npath=\n"],
+    ids=["script-without-path", "unknown-kind", "no-kind", "empty-path"],
+)
+def test_an_app_section_that_cannot_launch_runs_nothing(nem, section):
+    """Given an app section that names no launchable script (04 section 3)
+    When the package is launched
+    Then nothing runs, and it reports there is nothing to launch
+    """
+    marker = nem.root / "ran"
+    install(nem, sections=section, files={"bin/x": f'touch "{marker}"\n'})
+    res = nem.run("pkg-launch", "my.tool")
+    assert res.returncode == 1 and "nothing to launch" in res.stderr
+    assert not marker.exists()
+
+
+def test_a_failed_activity_launch_exits_with_one(nem):
+    """Given am failing
+    When the package is launched
+    Then it exits 1
+    """
+    install(nem, sections="[app.0]\nkind=sh\npath=bin/x\ncomponent=com.a/.X\n", files={"bin/x": "exit 0\n"})
+    executable(nem.bin("am"), "exit 1\n")
+    res = nem.run("pkg-launch", "my.tool")
+    assert res.returncode == 1 and "activity launch failed" in res.stderr
+
+
+def test_balanced_quotes_in_a_component_are_still_refused(nem):
+    """Given a component whose quotes would balance, so the shell would accept it
+    When the package is launched
+    Then it never reaches am
+    """
+    install(nem, sections="[app.0]\nkind=sh\npath=bin/x\ncomponent=a'b'c/.X\n", files={"bin/x": "exit 0\n"})
+    res = nem.run("pkg-launch", "my.tool")
+    assert res.returncode == 1
+    assert "am start" not in nem.calls()
+
+
+def test_only_apk_apps_are_uninstalled_through_pm(nem):
+    """Given a script app that also names an Android package
+    When the package is uninstalled
+    Then pm is not called
+    """
+    install(nem, sections="[app.0]\nkind=sh\npath=bin/x\npackage=com.a\n", files={"bin/x": "exit 0\n"})
+    assert nem.run("uninstall", "my.tool").returncode == 0
+    assert "pm uninstall" not in nem.calls()
+
+
+@pytest.mark.parametrize("key,suffix", [("package", ""), ("component", "/.X")], ids=["package", "component"])
+def test_android_package_names_have_a_length_limit(nem, key, suffix):
+    """Given names of 159 and 160 characters (pkg.c safe_pkg_name, android_pkg_id)
+    When each package is uninstalled
+    Then the longest that fits reaches pm, and the next is refused
+    """
+    for length, expected in ((159, True), (160, False)):
+        nem.reset()
+        name = "a" * length
+        install(nem, sections=f"[app.0]\nkind=apk\npath=app/a.apk\n{key}={name}{suffix}\n", files={"app/a.apk": "apk"})
+        nem.run("uninstall", "my.tool")
+        assert (f"pm uninstall {name} " in nem.calls()) is expected
+
+
+def test_very_long_pm_output_is_handled(nem):
+    """Given pm printing far more than the capture buffer holds, with its result first
+    When an apk installs
+    Then the install succeeds
+    """
+    nem.pm_script('case "$1" in\ninstall) echo Success; head -c 20000 /dev/zero | tr "\\0" x ;;\nesac\n')
+    res = install(nem, sections="[app.0]\nkind=apk\npath=app/a.apk\npackage=com.a\n", files={"app/a.apk": "apk"})
+    assert res.returncode == 0
+
+
+def test_an_apps_directory_that_cannot_be_written_fails_the_install(nem):
+    """Given an apps directory that cannot be written
+    When a package installs
+    Then it fails and is not recorded
+    """
+    needs_non_root()
+    apps = nem.path("/data/nemesis/apps")
+    apps.mkdir(parents=True, exist_ok=True)
+    apps.chmod(0o555)
+    try:
+        res = nem.run("install", nem.package())
+    finally:
+        apps.chmod(0o755)
+    assert res.returncode != 0
+    assert "my.tool" not in nem.db()
+
+
+def test_pkg_info_refuses_a_bad_id(nem):
+    """Given a manifest with a bad id
+    When pkg-info reads it
+    Then it exits 1
+    """
+    res = nem.run("pkg-info", make_zip(nem.workdir / "p.zip", {"NEMESIS.data": "[nemesis]\nid=../x\n"}))
+    assert res.returncode == 1 and "invalid package id" in res.stderr
+
+
+def damaged_after_the_manifest(nem, how):
+    target = make_zip(nem.workdir / "p.zip", {"NEMESIS.data": GOOD, "payload": b"payload " * 64})
+    with zipfile.ZipFile(target) as z:
+        info = z.getinfo("payload")
+    raw = target.read_bytes()
+    if how == "method":
+        at = raw.rfind(b"PK\x01\x02") + 10
+        raw = raw[:at] + struct.pack("<H", 99) + raw[at + 2:]
+    elif how == "local-header":
+        raw = raw[: info.header_offset] + b"XXXX" + raw[info.header_offset + 4 :]
+    else:
+        start = info.header_offset + 30 + len("payload")
+        raw = raw[:start] + b"\xff" * 8 + raw[start + 8:]
+    target.write_bytes(raw)
+    return target
+
+
+@pytest.mark.parametrize("how", ["method", "local-header", "deflate"])
+def test_damage_after_a_good_manifest_is_still_refused(nem, how):
+    """Given a zip whose manifest reads fine but a later member is damaged
+    When pkg-info and install read it
+    Then both refuse it, instead of trusting the part they already read
+    """
+    target = damaged_after_the_manifest(nem, how)
+    assert nem.run("pkg-info", target).returncode != 0
+    assert nem.run("install", target).returncode != 0
+    assert "my.tool" not in nem.db()
