@@ -36,8 +36,9 @@ capacity, by the owner, on the owner's unit.
 
 This project does not, and packages for it must not:
 
-- **Target vehicles the operator does not own.** There is no remote-deployment capability and none
-  is intended.
+- **Target vehicles the operator does not own.** NEMESIS can download packages and core updates
+  from a store server, and installs them only after the owner confirms on the unit. It has no way
+  to push software to a unit, and none is intended.
 - **Touch vehicle safety systems.** No package may actuate braking, steering, throttle,
   transmission, powertrain control, airbags, lighting, or driver-assistance functions.
 - **Write CAN bus messages directly.** Where a feature needs a vehicle signal, it must use the same
@@ -46,10 +47,14 @@ This project does not, and packages for it must not:
 - **Modify the stock launcher or stock applications.** NEMESIS adds alongside them; it does not
   patch OEM apps.
 - **Exfiltrate data.** All logging goes to local storage on the unit (`/data/nemesis/logs/`). No
-  package may open outbound network connections for telemetry.
+  package may open outbound network connections for telemetry. The Manager's update check and
+  Store send requests to a store server, `portal.xwtk.cloud` by default. The update check sends the
+  NEMESIS version and the unit's OS and model, with no account data or cookies. It runs in the
+  background at most once every 24 hours.
 - **Persist against the owner's intent.** Every package is removable with `nemesis uninstall <id>`,
-  and the whole installation with `nemesis wipe --confirm`. The one locked component
-  (`usb-handler`) is removable by wipe and exists so the owner always retains a USB recovery path.
+  and the whole installation with `nemesis wipe --confirm`. The locked components (`usb-handler`
+  and `nemesis.update-monitor`) are removable by wipe. `usb-handler` exists so the owner always
+  retains a USB recovery path; `nemesis.update-monitor` schedules the update check.
 
 ## Known trust implications
 
@@ -67,10 +72,14 @@ correctly; these are properties a reader should assume, not anomalies to explain
   package signature provenance on this unit is the owner's responsibility, not the platform's.
   Package authors never perform this step themselves. See `04-Packages.md`.
 - **A USB stick can run code as root on insertion.** With Android up, the owner must physically
-  insert the stick and confirm a dialog. With Android not up, no dialog can be shown, so the
-  descriptor is acted on automatically; this is the recovery path for a unit that will not boot
-  into Android, and it still requires physical insertion. Anyone with physical access to the unit
-  and a prepared stick can therefore run code on it. Treat physical access as root access.
+  insert the stick and confirm a dialog. With Android not up, no dialog can be shown, so a stick is
+  acted on automatically only if its root also holds a file named `NEMESIS.emergency`; otherwise it
+  waits for Android. This is the recovery path for a unit that will not boot into Android, and it
+  still requires physical insertion. Anyone with physical access to the unit and a prepared stick
+  can therefore run code on it. Treat physical access as root access.
+- **Core updates replace NEMESIS itself and can add root certificates to the system store.** Update
+  packages are checked against an MD5 list inside the package, which catches damage but does not
+  prove who made it. Trust in an update rests on where it came from.
 
 These are documented so that anyone extending the project understands what they are building on.
 They are not a defect list, and they are not an argument that the capabilities are harmless.
