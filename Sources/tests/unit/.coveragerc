@@ -1,3 +1,5 @@
 [run]
 parallel = True
-include = */Sources/tools/make_nemesis_package.py
+include =
+    */Sources/tools/make_nemesis_package.py
+    */Sources/tools/make_update_zip.py

@@ -93,6 +93,74 @@ def test_invalid_id_is_refused(pkg, tmp_path, bad):
     assert build(pkg, "-o", tmp_path / "o.zip").returncode != 0
 
 
+def manifest(pkg, data):
+    (pkg / "NEMESIS.data").write_bytes(data.encode() if isinstance(data, str) else data)
+
+
+@pytest.mark.parametrize(
+    "body, warning",
+    [
+        ("version=1.1\nid=my.tool\ntypes=a\npackage-version=1.0\nshort-desc=s\n", "uses type=, not types="),
+        ("version=1.1\nid=my.tool\npackage-version=1.0\nshort-desc=s\n", "no type= given"),
+        ("version=1.1\nid=my.tool\ntype=a\nshort-desc=s\n", "package-version= is not set"),
+        ("version=1.1\nid=my.tool\ntype=a\npackage-version=1.0\n", "short-desc= is not set"),
+        ("version=1.0\nid=my.tool\nos=any\n", "1.1 keys present"),
+    ],
+)
+def test_incomplete_descriptors_warn_and_still_build(pkg, tmp_path, body, warning):
+    """Given a descriptor the unit would accept but which is missing what it should have
+    When the builder runs on it
+    Then it warns and writes the zip
+    """
+    manifest(pkg, f"[nemesis]\n{body}")
+    res = build(pkg, "-o", tmp_path / "o.zip")
+    assert res.returncode == 0, res.stderr
+    assert warning in res.stdout
+    assert (tmp_path / "o.zip").exists()
+
+
+def test_a_complete_descriptor_builds_without_warnings(pkg, tmp_path):
+    manifest(pkg, "[nemesis]\nversion=1.1\nid=my.tool\ntype=a\npackage-version=1.0\nshort-desc=s\n")
+    res = build(pkg, "-o", tmp_path / "o.zip")
+    assert res.returncode == 0
+    assert "warning" not in res.stdout
+
+
+@pytest.mark.parametrize(
+    "value",
+    ['"a\\"b\\\\c"', '"two\nlines"', '"two\r\nlines"', '"lone\rreturn"', '"closed" trailing', "   plain  "],
+)
+def test_quoted_and_plain_values_parse_as_the_unit_reads_them(pkg, tmp_path, value):
+    manifest(pkg, f"# comment\n; comment\n\r\nnot a pair\n[nemesis]\n  \nid=my.tool\nshort-desc={value}\n[other\n[other]\nid=ignored\n")
+    assert build(pkg, "-o", tmp_path / "o.zip").returncode == 0
+
+
+@pytest.mark.parametrize(
+    "depends",
+    ["other", "other@any", "other@1.2", "other@>=1.2", "other@<=1.2", "other@1.2-1.5", " a , b@1.0 ,"],
+)
+def test_valid_dependency_specs_build(pkg, tmp_path, depends):
+    manifest(pkg, f"[nemesis]\nid=my.tool\ndepends={depends}\n")
+    assert build(pkg, "-o", tmp_path / "o.zip").returncode == 0
+
+
+def test_a_value_over_the_ini_limit_is_refused(pkg, tmp_path):
+    manifest(pkg, "[nemesis]\nid=my.tool\nname=" + "x" * 1024 + "\n")
+    res = build(pkg, "-o", tmp_path / "o.zip")
+    assert res.returncode != 0
+    assert "value too long" in res.stderr
+
+
+def test_a_descriptor_that_is_not_utf8_is_refused(pkg, tmp_path):
+    manifest(pkg, b"[nemesis]\nid=my.tool\nname=\xff\n")
+    assert build(pkg, "-o", tmp_path / "o.zip").returncode != 0
+
+
+def test_only_the_nemesis_section_counts(pkg, tmp_path):
+    manifest(pkg, "[other]\nid=my.tool\n")
+    assert build(pkg, "-o", tmp_path / "o.zip").returncode != 0
+
+
 @known_bug("G18", "builder never checks that declared paths exist")
 def test_declared_path_must_exist(pkg, tmp_path):
     (pkg / "bin" / "tool.sh").unlink()

@@ -74,6 +74,14 @@ int shim_mount(const char *dev, const char *mnt, const char *fstype, unsigned lo
     return 0;
 }
 
+/* Tests do not run as root. A file named chown_fails makes it fail as it would on a broken unit. */
+int shim_chown(const char *path, uid_t owner, gid_t group) {
+    (void)path;
+    (void)owner;
+    (void)group;
+    return access(TEST_ROOT "/chown_fails", F_OK) == 0 ? -1 : 0;
+}
+
 /* Command strings hold absolute unit paths, so those move under TEST_ROOT too. */
 static char *rewrite(const char *text) {
     static const char *const from[] = { "/system/bin/", "/system/xbin/" };
