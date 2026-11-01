@@ -30,7 +30,8 @@ Documentation scope:
 
 - The canonical docs for work in this repo are `02-Debugging-Execution-Interface.md`,
   `04-Packages.md`, `05-Run-Scripts.md`, `README.md`, `SCOPE.md`, `Packages/README.md`,
-  `docs/creating-a-package.md`, `docs/testing.md`, `docs/oem-source-release.md`, and `Sources/usb_bundle/README.md` + `DEVICE_TEST.md`.
+  `docs/creating-a-package.md`, `docs/testing.md`, `docs/oem-source-release.md`,
+  `docs/source-release-notes.md`, and `Sources/usb_bundle/README.md` + `DEVICE_TEST.md`.
 - `01-DSP-OTA-troubleShooter.md` and `03-Install-and-Uninstall.md` cover the install path and are
   not part of this checkout. They are out of scope for package work — do not link to them in new
   docs. Nothing in package authoring depends on them.
@@ -60,6 +61,7 @@ hmg_nemesis/
 │   ├── creating-a-package.md            ← step-by-step package authoring guide
 │   ├── testing.md                       ← how to run tests, coverage, and mutation testing
 │   ├── oem-source-release.md            ← what the Mobis source download holds and how to search it
+│   ├── source-release-notes.md           ← oddities, aging components and licensing traps in that download
 │   └── jev-hooks-replication-prompt.md  ← reusable prompt for Claude Code hook systems
 └── Sources/
     ├── Makefile                    ← top-level dev build (expects a Linux ext4 tree)

@@ -4,6 +4,8 @@ Hyundai Mobis publishes the open-source code used in this head unit. This guide 
 
 The release is reference material only. It holds no firmware and cannot boot, and most of what a package touches is not in it. Start with [Creating a package](creating-a-package.md), then come here with a specific question.
 
+For the release's oddities, component versions and licensing traps, see [the notes](source-release-notes.md).
+
 ## Get the files
 
 Download them by hand from the [Mobis open source page](https://www.mobis.com/en/tech/rnd.do#open_alert):
@@ -70,6 +72,7 @@ The kernel version is not stored in the release, because the kernel folders have
 | Question | Look at |
 |---|---|
 | Might the vendor have changed this Android file? | [The file lists](#android-what-the-vendor-changed) |
+| Which vendor app owns a package name my hook touches? | [Vendor app notices](#vendor-app-notices-and-the-shipped-packages) |
 | What permissions and groups does Android map? | `AVNT5W_DaudioKK_platform_frameworksbase/data/etc/platform.xml` |
 | Can the kernel do this? | [Kernel options](#kernel-options) |
 | Why did the kernel log or refuse something? | The kernel source, then the [change notes](#kernel-change-notes) |
@@ -94,6 +97,14 @@ Quick boot matters for `Sources/boot/qb_hook.sh`, which NEMESIS uses to start at
 | Other `AVNT5W_TCC803XKK_*` and `*_external*` folders | About 13,000 | [Open-source components](#open-source-components) |
 | 113 `AVNT5W_*.txt` files | Not applicable | License text, vendor file lists, and kernel change notes |
 
+The 504 are 145 fonts, 358 keyboard layouts and that one `platform.xml`. None of it is vendor app code.
+
+`platform.xml` is the exception to the vendor-modification pattern, and worth knowing before you rely on it. It is stock AOSP under a Broadcom copyright with no Mobis additions: 23 permissions mapping to 18 groups, all of them AOSP names such as `inet`, `log`, `sdcard_rw`, `net_bt`, `media_rw` and `diag`. Only `DaudioKK` ships it; the `TCC803XKK` frameworksbase folder has no `data/etc` at all. So it documents the permission-to-GID mapping a `uid=system` service runs under, but it is not evidence of anything the vendor changed, and a permission missing from it may still exist on the unit. Check the unit's own copy before relying on it; AOSP installs this file to `/system/etc/permissions/platform.xml`, but the vendor may have moved it:
+
+```sh
+nemesis root -c "ls /system/etc/permissions/platform.xml"
+```
+
 ## Android: what the vendor changed
 
 The source of the vendor's Android is **not** included. The `.txt` files are license notices that list file paths, with one shared line such as `Mobis implementation`. They suggest vendor changes but do not say what changed in any file. That still tells you where stock Android documentation may not apply.
@@ -108,6 +119,15 @@ The source of the vendor's Android is **not** included. The `.txt` files are lic
 
 So, for example, the package manager service, `adb`, `init` and `vold` may differ from stock. Test against the unit, not stock KitKat behaviour.
 
+`AVNT5W_EngineerMode_Settings.txt` and `AVNT5W_EngineerMode_base.txt` hold the same two entries. They are the only place the release names Engineering Mode code:
+
+```text
+src/com/hkmc/system/app/engineering/module/WifiClientEnablerForEngineering.java
+src/com/hkmc/system/app/engineering/version/SystemVersionInfo.java
+```
+
+Both are listed as modified from AOSP, `WifiClientEnablerForEngineering.java` in 2017 and `SystemVersionInfo.java` in 2022 for version info. The source is not included, so this tells you the classes exist and were changed, not what they do. `SystemVersionInfo` is the area behind the `S5W_M` string that General Settings > SW Info shows and that the compatibility check in [README.md](../README.md) depends on.
+
 `AVNT5W_frameworks_base_base.txt` also shows classes that stock Android does not have, by name only:
 
 - `core/java/com/hkmc/`, including `Feature.java`, `gpm/GpmManager.java`, `internal/mode/ModeManager.java` and `internal/server/HkmcSystemServer.java`
@@ -115,6 +135,21 @@ So, for example, the package manager service, `adb`, `init` and `vold` may diffe
 - `mobis/native/cmds/`, including `dumpmobis`, `export_log` and `fastdumpstate`
 
 Only the names are known. To learn how one of these behaves, look at the unit itself.
+
+## Vendor app notices and the shipped packages
+
+Most `AVNT5W_*_base.txt` files name one or two vendor classes. That is enough to tie a package name your hook already uses to the vendor component that owns it, which is what you need before you `am force-stop` something or snapshot one of its files.
+
+| Package | What it touches on the unit | Notice in the release |
+|---|---|---|
+| `wireless.projection` | `am force-stop com.daudio.app.phoneprojection`, `com.daudio.app.dipo` | `AVNT5W_PhoneProjection_base.txt` names `com.daudio.app.phoneprojection.popup.BluetoothProgressDialog`, modified 2019. Confirms the `com.daudio.app.phoneprojection` package name is the vendor projection app. Nothing in the release covers `com.daudio.app.dipo` |
+| `adb.tcp` | `/system/etc/permissions/com.hkmc.software.engineermode.adb_hide.xml` | `AVNT5W_EngineerMode_*.txt`, which name `com.hkmc.system.app.engineering` classes. The `com.hkmc.software.engineermode` permission namespace is not in the release |
+| `projection.tbt` | Ships `HKMC_DiPO.apk`, `HKMC_GPM.apk`, `HKMC_Navi_ExSL.apk`, `Iap2ServerApp.apk` | Not in the release. `AVNT5W_DaudioKK_platform_telechipsipod` holds the Apple accessory library that `Iap2ServerApp` relates to, but no APK source |
+| `Sources/boot/qb_hook.sh` | Quick boot | `drivers/char/qb_common.c`, `include/linux/qb_manager.h` |
+
+Other vendor app notices exist with no shipped package behind them yet: `RearCareMode`, `Sports`, `NModeAppJSN`, `DMB`, `ModemFoTAService`, and four regional `Radio*_listview` files. Read them the same way, as a pointer to a class name, not as documentation of behaviour.
+
+A notice tells you a file was modified and when. It never tells you what the modification was, so it cannot replace reading the unit. Its use is narrower: it confirms you have the right package name, and it warns you that stock AOSP documentation for that area may not apply.
 
 ## Kernel options
 

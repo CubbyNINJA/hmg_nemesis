@@ -19,6 +19,7 @@ ALLOWED_DOCS = [
     "docs/creating-a-package.md",
     "docs/testing.md",
     "docs/oem-source-release.md",
+    "docs/source-release-notes.md",
     "Sources/usb_bundle/README.md",
     "Sources/usb_bundle/DEVICE_TEST.md",
 ]
