@@ -227,7 +227,6 @@ def test_a_package_that_fails_its_checksums_changes_nothing(installed, sums, ext
     assert "reboot" not in nem.calls()
 
 
-@known_bug("G24", "a line listed twice makes up for an unlisted file, so that file is never checked")
 def test_a_file_listed_twice_does_not_excuse_an_unlisted_one(installed):
     """Given MD5SUMS that lists one file twice and leaves another out (update.c:172)
     When `nemesis update` runs
@@ -265,6 +264,15 @@ def test_a_file_name_with_two_dots_is_not_a_parent_path(installed, name):
     res = nem.run("update", update_zip(nem, extra_sums=f"{md5('x')}  {name}\n"))
     assert res.returncode == 8
     assert "md5 mismatch" in res.stderr
+
+
+@pytest.mark.parametrize("path", ["./core/nemesis", "core/./nemesis", "core//nemesis", "core/nemesis/"])
+def test_a_file_cannot_be_listed_under_a_second_spelling(installed, path):
+    """Given MD5SUMS listing core/nemesis again under another spelling, which would hide an unlisted file"""
+    nem = installed
+    res = nem.run("update", update_zip(nem, extra_sums=f"{md5(new_binary(nem))}  {path}\n"))
+    assert res.returncode == 8
+    assert "bad path" in res.stderr
 
 
 @pytest.mark.parametrize("path", ["core/../x", ".."])

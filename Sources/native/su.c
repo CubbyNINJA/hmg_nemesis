@@ -1,6 +1,7 @@
 #include "nemesis.h"
 
 #include <poll.h>
+#include <signal.h>
 #include <stddef.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
@@ -411,6 +412,15 @@ int su_client_main(int argc, char **argv) {
     int restc = argc - 1;
 
     if (restc < 1) return 1;
+    /* A write to a channel that hung up must reach the error below, not end this process. */
+    signal(SIGPIPE, SIG_IGN);
+    /* The server holds an argument and its terminator in SU_MAX_ARG bytes. */
+    for (i = 0; i < restc; i++) {
+        if (strlen(rest[i]) >= SU_MAX_ARG) {
+            fprintf(stderr, "nemesis: daemon write failed: argument too long\n");
+            return 1;
+        }
+    }
     fd = connect_retry();
     if (fd < 0) {
         fprintf(stderr, "nemesis: daemon not running (euid=%d)\n", (int)geteuid());

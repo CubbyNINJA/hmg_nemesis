@@ -50,7 +50,6 @@ def test_keys_outside_the_section_are_not_metadata(nem):
     assert "invalid package metadata" in res.stderr
 
 
-@known_bug("G16", "a UTF-8 BOM hides the first section header")
 def test_utf8_bom_is_tolerated(nem):
     assert info(nem, {"NEMESIS.data": b"\xef\xbb\xbf" + GOOD.encode()}).returncode == 0
 
@@ -65,7 +64,6 @@ def test_a_large_manifest_keeps_its_id(nem):
     assert info(nem, {"NEMESIS.data": text}).returncode == 0
 
 
-@known_bug("G15", "any member named NEMESIS.data can supply the metadata")
 def test_a_nested_manifest_does_not_supply_the_metadata(nem):
     members = {"A/NEMESIS.data": "[nemesis]\nid=nested\n", "NEMESIS.data": GOOD}
     assert "id=my.tool\n" in info(nem, members).stdout
@@ -165,7 +163,6 @@ def test_unsupported_compression_is_refused(nem):
     assert nem.run("install", target).returncode != 0
 
 
-@known_bug("G14", "CRC is never checked")
 def test_a_corrupted_member_is_refused(nem):
     target = make_zip(nem.workdir / "p.zip", {"NEMESIS.data": GOOD, "payload": b"A" * 64}, zipfile.ZIP_STORED)
     raw = target.read_bytes()
@@ -242,7 +239,6 @@ def test_a_member_that_cannot_be_written_fails_the_install(nem, method):
     assert not nem.app().exists()
 
 
-@known_bug("G14", "a member shorter than its declared size is written with heap bytes")
 def test_a_member_shorter_than_declared_is_refused(nem):
     target = make_zip(nem.workdir / "p.zip", {"NEMESIS.data": GOOD, "payload": b"A" * 64})
     raw = bytearray(target.read_bytes())
@@ -253,7 +249,6 @@ def test_a_member_shorter_than_declared_is_refused(nem):
     assert nem.run("install", target).returncode != 0
 
 
-@known_bug("G16", "lowercase manifest installs, then uninstall cannot find it")
 def test_lowercase_manifest_keeps_its_hooks_on_uninstall(nem):
     log = f'echo ran >> "{nem.root}/hooks"\n'
     members = {"nemesis.data": GOOD + "preuninstall=scripts/u.sh\n", "scripts/u.sh": log}
@@ -370,7 +365,6 @@ def test_pkg_info_reports_an_installed_package(nem):
     assert "installed=1\n" in res_text and "locked=0\n" in res_text
 
 
-@known_bug("G23", "install accepts an id starting with - but uninstall reads it as an option and refuses")
 def test_a_package_install_accepts_can_be_uninstalled_even_with_a_leading_dash(nem):
     """Given a zip whose id starts with a dash (04-Packages.md allows it, the builder refuses it)
     When it is installed and then uninstalled by id
@@ -413,7 +407,6 @@ def test_uninstall_without_id_prints_usage(nem):
     assert "usage: nemesis uninstall" in nem.run("uninstall").stderr
 
 
-@known_bug("G3", "a pipe in name shifts the DB fields, and locked reads as 1")
 def test_a_package_name_cannot_lock_the_package(nem):
     nem.run("install", nem.package(extra_meta=""))
     target = make_zip(nem.workdir / "pipe-name.zip", {"NEMESIS.data": "[nemesis]\nid=pipe.tool\nname=x|1|y\n"})
@@ -594,7 +587,6 @@ def test_launch_refuses_a_component_that_could_break_the_quoting(nem):
     assert "am start" not in nem.calls()
 
 
-@known_bug("D3", "pkg-launch always runs scripts as root and ignores uid=system")
 def test_d3_app_uid_system_is_honoured(nem):
     sections = "[app.0]\nkind=sh\npath=bin/a.sh\nuid=system\n"
     nem.run("install", nem.package(sections=sections, files={"bin/a.sh": "exit 0\n"}))
@@ -603,7 +595,6 @@ def test_d3_app_uid_system_is_honoured(nem):
     assert "uid 1000" in nem.ids()
 
 
-@known_bug("D4", "NEMESIS.data paths are not checked for ..")
 @pytest.mark.parametrize(
     "extra,sections",
     [

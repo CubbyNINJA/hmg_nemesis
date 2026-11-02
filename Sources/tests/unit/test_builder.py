@@ -72,7 +72,6 @@ def test_missing_manifest_is_refused(tmp_path):
     assert not (tmp_path / "o.zip").exists()
 
 
-@known_bug("G1", "builder ships CRLF scripts unchanged")
 def test_crlf_scripts_do_not_reach_the_unit(pkg, tmp_path):
     (pkg / "bin" / "tool.sh").write_bytes(b"#!/system/bin/sh\r\nexit 0\r\n")
     out = tmp_path / "o.zip"
@@ -80,7 +79,6 @@ def test_crlf_scripts_do_not_reach_the_unit(pkg, tmp_path):
     assert res.returncode != 0 or b"\r" not in zipfile.ZipFile(out).read("bin/tool.sh")
 
 
-@known_bug("G1", "no .gitattributes pins LF, and core.autocrlf rewrites checkouts")
 def test_gitattributes_pins_lf_for_unit_files():
     text = (REPO / ".gitattributes").read_text(encoding="utf-8")
     assert "*.sh text eol=lf" in text
@@ -199,13 +197,11 @@ def test_only_the_nemesis_section_counts(pkg, tmp_path):
     assert build(pkg, "-o", tmp_path / "o.zip").returncode != 0
 
 
-@known_bug("G18", "builder never checks that declared paths exist")
 def test_declared_path_must_exist(pkg, tmp_path):
     (pkg / "bin" / "tool.sh").unlink()
     assert build(pkg, "-o", tmp_path / "o.zip").returncode != 0
 
 
-@known_bug("G18", "output inside the package zips itself")
 def test_output_inside_the_package_is_not_zipped_into_itself(pkg):
     out = pkg / "o.zip"
     assert build(pkg, "-o", out).returncode == 0

@@ -43,6 +43,8 @@ int ini_load_mem(ini_file *ini, const char *text) {
     int lineno = 1;
     memset(ini, 0, sizeof(*ini));
     sec[0] = 0;
+    /* Windows editors can start a UTF-8 file with a byte order mark. */
+    if (!strncmp(p, "\xef\xbb\xbf", 3)) p += 3;
     while (*p) {
         char key[MAX_LINE];
         char val[sizeof(((ini_kv *)0)->val)];

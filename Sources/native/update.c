@@ -136,6 +136,9 @@ static int rel_path_ok(const char *rel) {
     while (*p) {
         if (p[0] == '.' && p[1] == '.' && (p[2] == '/' || p[2] == 0) && (p == rel || p[-1] == '/'))
             return 0;
+        /* A file has one spelling, or one could be listed twice under different names. */
+        if (p[0] == '.' && (p[1] == '/' || p[1] == 0) && (p == rel || p[-1] == '/')) return 0;
+        if (p[0] == '/' && (p[1] == '/' || p[1] == 0)) return 0;
         p++;
     }
     return 1;
@@ -170,8 +173,28 @@ static int count_files(const char *dir, const char *top) {
 }
 
 /* Every file in the package must be listed in MD5SUMS and match. */
+/* Adds rel to a newline-separated list. Returns 1 if it was already there. */
+static int already_listed(char **seen, size_t *used, const char *rel) {
+    size_t n = strlen(rel);
+    char *grown, *at = *seen;
+    while (at && (at = strstr(at, rel))) {
+        if ((at == *seen || at[-1] == '\n') && at[n] == '\n') return 1;
+        at++;
+    }
+    grown = realloc(*seen, *used + n + 2);
+    if (!grown) return 1;
+    memcpy(grown + *used, rel, n);
+    grown[*used + n] = '\n';
+    grown[*used + n + 1] = 0;
+    *seen = grown;
+    *used += n + 1;
+    return 0;
+}
+
 static int verify_md5sums(const char *root) {
     char path[MAX_PATH], line[MAX_LINE];
+    char *seen = NULL;
+    size_t seen_used = 0;
     FILE *f;
     int listed = 0, have_bin = 0, total;
     snprintf(path, sizeof(path), "%s/MD5SUMS", root);
@@ -195,6 +218,7 @@ static int verify_md5sums(const char *root) {
         if (i != 32 || (sum[32] != ' ' && sum[32] != '\t')) {
             fprintf(stderr, "update: bad MD5SUMS line: %s\n", line);
             fclose(f);
+            free(seen);
             return -1;
         }
         rel = sum + 32;
@@ -203,6 +227,14 @@ static int verify_md5sums(const char *root) {
         if (!rel_path_ok(rel)) {
             fprintf(stderr, "update: bad path in MD5SUMS: %s\n", rel);
             fclose(f);
+            free(seen);
+            return -1;
+        }
+        /* The total below counts lines, so a repeat would hide an unlisted file. */
+        if (already_listed(&seen, &seen_used, rel)) {
+            fprintf(stderr, "update: listed twice in MD5SUMS: %s\n", rel);
+            fclose(f);
+            free(seen);
             return -1;
         }
         snprintf(fp, sizeof(fp), "%s/%s", root, rel);
@@ -211,12 +243,14 @@ static int verify_md5sums(const char *root) {
             fprintf(stderr, "update: md5 mismatch: %s\n", rel);
             log_msg("update: md5 mismatch %s want=%s have=%s", rel, want, have[0] ? have : "missing");
             fclose(f);
+            free(seen);
             return -1;
         }
         if (!strcmp(rel, "core/nemesis")) have_bin = 1;
         listed++;
     }
     fclose(f);
+    free(seen);
     if (!have_bin) {
         fprintf(stderr, "update: core/nemesis missing from MD5SUMS\n");
         return -1;
