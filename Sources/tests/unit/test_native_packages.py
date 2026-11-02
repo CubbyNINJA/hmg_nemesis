@@ -696,7 +696,10 @@ def test_wipe_stops_the_daemons(nem):
     nem.run("watchdog")
     assert wait_for((nem.root / "data/nemesis/watchdog.pid").exists)
     pid = int((nem.root / "data/nemesis/watchdog.pid").read_text().split()[0])
-    nem.run("wipe", "--confirm")
+    # Startup rewrites packages.db, and a wipe that reads it then can fail (G13), so wait it out.
+    assert wait_for(lambda: "svcmgr start" in nem.log())
+    time.sleep(1)
+    assert nem.run("wipe", "--confirm").returncode == 0
     time.sleep(1)
     assert not os.path.exists(f"/proc/{pid}")
 
