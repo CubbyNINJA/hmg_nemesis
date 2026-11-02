@@ -283,8 +283,7 @@ def test_a_wipe_that_cannot_remove_the_hook_says_so(nem):
     Then the wipe finishes, because stopping there would leave no CLI to retry with, and it says the hook stayed
     """
     qb = nem.path("system/etc/qb_runtime.sh")
-    qb.write_text("stock
-" + OLD_HOOK)
+    qb.write_text("stock\n" + OLD_HOOK)
     nem.path("chown_fails").write_text("")
     res = nem.run("wipe", "--confirm", "--no-reboot")
     assert res.returncode == 0
@@ -298,21 +297,11 @@ def test_a_failed_preuninstall_stops_an_update(nem):
     When an update runs
     Then it exits 5, as uninstall does, and the old package stays with its service running
     """
-    sections = "[service.0]
-name=d
-kind=sh
-path=svc/d.sh
-mode=background
-"
-    extra = "preuninstall=scripts/u.sh
-"
-    files = {"svc/d.sh": "sleep 60
-", "scripts/u.sh": "exit 1
-", "old.txt": "x"}
+    sections = "[service.0]\nname=d\nkind=sh\npath=svc/d.sh\nmode=background\n"
+    extra = "preuninstall=scripts/u.sh\n"
+    files = {"svc/d.sh": "sleep 60\n", "scripts/u.sh": "exit 1\n", "old.txt": "x"}
     assert nem.run("install", nem.package(log_hooks=False, extra_meta=extra, sections=sections, files=files)).returncode == 0
-    new = make_zip(nem.workdir / "n.zip", {"NEMESIS.data": "[nemesis]
-id=my.tool
-", "new.txt": "y"})
+    new = make_zip(nem.workdir / "n.zip", {"NEMESIS.data": "[nemesis]\nid=my.tool\n", "new.txt": "y"})
     assert nem.run("install", "--update", new).returncode == 5
     assert (nem.app() / "old.txt").exists()
     assert not (nem.app() / "new.txt").exists()
