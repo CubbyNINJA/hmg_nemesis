@@ -335,7 +335,6 @@ def test_update_replaces_the_old_tree_and_runs_old_uninstall_hooks(nem):
     assert nem.db().count("my.tool|") == 1
 
 
-@known_bug("G2", "update deletes the old tree before the new install can fail")
 def test_a_failed_update_leaves_the_package_usable(nem):
     nem.run("install", nem.package(files={"old.txt": "x"}))
     res = nem.run("install", "--update", nem.package(files={"scripts/pre.sh": "exit 9\n"}))
@@ -529,7 +528,6 @@ def test_an_unsafe_android_package_name_never_reaches_pm(nem):
     assert "pm uninstall" not in nem.calls()
 
 
-@known_bug("G5", "killing the CLI during pm leaves sys.boot_completed at 0")
 def test_a_killed_install_does_not_leave_the_property_cleared(nem):
     marker = nem.root / "in-pm"
     nem.pm_script(f'touch "{marker}"\nsleep 30\necho Success\n')
@@ -537,7 +535,7 @@ def test_a_killed_install_does_not_leave_the_property_cleared(nem):
     assert wait_for(marker.exists)
     os.kill(proc.pid, signal.SIGKILL)
     proc.wait()
-    assert nem.prop("sys.boot_completed") == "1"
+    assert wait_for(lambda: nem.prop("sys.boot_completed") == "1", 5)
 
 
 # --- launch
@@ -704,7 +702,6 @@ def test_wipe_stops_the_daemons(nem):
     assert not os.path.exists(f"/proc/{pid}")
 
 
-@known_bug("G13", "DB writes truncate in place with no lock, so a concurrent reader or writer can lose rows")
 def test_db_writes_are_atomic():
     # No reliable way to force the race from outside, so this checks the mechanism.
     source = (REPO / "Sources/native/pkg.c").read_text(encoding="utf-8")

@@ -4,6 +4,7 @@
 #include <signal.h>
 #include <strings.h>
 #include <sys/system_properties.h>
+#include <sys/wait.h>
 #include <sys/xattr.h>
 
 static int pkg_id_ok(const char *id) {
@@ -87,22 +88,45 @@ int pkg_find(const char *id, pkg_rec *out) {
     return found ? 0 : -1;
 }
 
+/* Databases are written to a temp file and renamed over the old one, so a reader
+ * sees the old file or the new one, never a part. */
+static int db_flush(FILE *f) {
+    int bad = fflush(f) != 0 || fsync(fileno(f)) != 0;
+    if (fclose(f) != 0) bad = 1;
+    return bad ? -1 : 0;
+}
+
 int pkg_save_all(pkg_rec *list, int n) {
     FILE *f;
+    char tmp[MAX_PATH];
     int i;
     mkdir_p(NEMESIS_ROOT, 0755);
-    f = fopen(PACKAGES_DB, "w");
+    snprintf(tmp, sizeof(tmp), "%s.%d", PACKAGES_DB, (int)getpid());
+    f = fopen(tmp, "w");
     if (!f) return -1;
     for (i = 0; i < n; i++) {
         fprintf(f, "%s|%s|%d|%s\n", list[i].id, list[i].name, list[i].locked, list[i].types);
     }
-    fclose(f);
+    if (db_flush(f) != 0 || rename(tmp, PACKAGES_DB) != 0) {
+        unlink(tmp);
+        return -1;
+    }
     return 0;
+}
+
+/* Holds off other writers across a read, change and save. Released by close(). */
+static int db_lock(const char *db) {
+    mkdir_p(NEMESIS_ROOT, 0755);
+    return pidfile_lock(db);
+}
+
+static void db_unlock(int fd) {
+    if (fd >= 0) close(fd);
 }
 
 int pkg_upsert(const pkg_rec *p) {
     pkg_rec *list = NULL;
-    int n = 0, i, found = 0;
+    int n = 0, i, found = 0, lk = db_lock(PACKAGES_DB);
     pkg_list_load(&list, &n);
     for (i = 0; i < n; i++) {
         if (!strcmp(list[i].id, p->id)) {
@@ -117,12 +141,13 @@ int pkg_upsert(const pkg_rec *p) {
     }
     i = pkg_save_all(list, n);
     free(list);
+    db_unlock(lk);
     return i;
 }
 
 int pkg_remove(const char *id) {
     pkg_rec *list = NULL;
-    int n = 0, i, w = 0;
+    int n = 0, i, w = 0, lk = db_lock(PACKAGES_DB);
     pkg_list_load(&list, &n);
     for (i = 0; i < n; i++) {
         if (!strcmp(list[i].id, id)) continue;
@@ -130,6 +155,7 @@ int pkg_remove(const char *id) {
     }
     i = pkg_save_all(list, w);
     free(list);
+    db_unlock(lk);
     return i;
 }
 
@@ -182,20 +208,25 @@ int svc_list_load(svc_rec **out, int *n) {
 
 int svc_save_all(svc_rec *list, int n) {
     FILE *f;
+    char tmp[MAX_PATH];
     int i;
     mkdir_p(NEMESIS_ROOT, 0755);
-    f = fopen(SERVICES_DB, "w");
+    snprintf(tmp, sizeof(tmp), "%s.%d", SERVICES_DB, (int)getpid());
+    f = fopen(tmp, "w");
     if (!f) return -1;
     for (i = 0; i < n; i++) {
         fprintf(f, "%s|%s|%s|%s|%s\n", list[i].qname, list[i].kind, list[i].path, list[i].uid, list[i].mode);
     }
-    fclose(f);
+    if (db_flush(f) != 0 || rename(tmp, SERVICES_DB) != 0) {
+        unlink(tmp);
+        return -1;
+    }
     return 0;
 }
 
 int svc_remove_prefix(const char *id) {
     svc_rec *list = NULL;
-    int n = 0, i, w = 0;
+    int n = 0, i, w = 0, lk = db_lock(SERVICES_DB);
     char prefix[MAX_ID + 2];
     snprintf(prefix, sizeof(prefix), "%s/", id);
     svc_list_load(&list, &n);
@@ -208,6 +239,7 @@ int svc_remove_prefix(const char *id) {
     }
     i = svc_save_all(list, w);
     free(list);
+    db_unlock(lk);
     return i;
 }
 
@@ -411,12 +443,35 @@ static int pm_install_apk(const char *apk, const char *apkid) {
     char pathout[256];
     int cleared = 0;
     int ok;
+    int guard_fd = -1;
+    pid_t guard = -1;
 
     prev[0] = 0;
     if (__system_property_get("sys.boot_completed", prev) > 0 && prev[0] == '1') {
         if (__system_property_set("sys.boot_completed", "0") == 0) {
+            int gp[2];
             cleared = 1;
             log_msg("pm: cleared sys.boot_completed for install");
+            /* If this process dies during pm, the pipe closes with nothing written
+             * and the guard puts the value back. */
+            if (pipe(gp) == 0) {
+                guard = fork();
+                if (guard == 0) {
+                    char c;
+                    close(gp[1]);
+                    signal(SIGHUP, SIG_IGN);
+                    signal(SIGTERM, SIG_IGN);
+                    if (read(gp[0], &c, 1) <= 0) __system_property_set("sys.boot_completed", prev);
+                    _exit(0);
+                }
+                close(gp[0]);
+                if (guard > 0) {
+                    guard_fd = gp[1];
+                    fcntl(guard_fd, F_SETFD, FD_CLOEXEC);
+                } else {
+                    close(gp[1]);
+                }
+            }
         } else {
             log_msg("pm: WARN could not clear sys.boot_completed");
         }
@@ -444,6 +499,11 @@ static int pm_install_apk(const char *apk, const char *apkid) {
     if (cleared) {
         if (__system_property_set("sys.boot_completed", prev) != 0)
             log_msg("pm: WARN could not restore sys.boot_completed=%s", prev);
+    }
+    if (guard_fd >= 0) {
+        if (write(guard_fd, "1", 1) < 0) log_msg("pm: guard write failed errno=%d", errno);
+        close(guard_fd);
+        waitpid(guard, NULL, 0);
     }
 
     if (ok) return 0;
@@ -487,7 +547,7 @@ static int install_apks(const ini_file *ini, const char *root) {
 
 static int register_services(const ini_file *ini, const char *id, const char *root) {
     svc_rec *list = NULL;
-    int n = 0, i, w;
+    int n = 0, i, w, lk = db_lock(SERVICES_DB);
     char prefix[MAX_ID + 2];
     snprintf(prefix, sizeof(prefix), "%s/", id);
     svc_list_load(&list, &n);
@@ -525,6 +585,7 @@ static int register_services(const ini_file *ini, const char *id, const char *ro
     }
     i = svc_save_all(list, n);
     free(list);
+    db_unlock(lk);
     return i;
 }
 
@@ -616,11 +677,15 @@ static int uninstall_tree(const char *id, int allow_locked, int force) {
     return 0;
 }
 
+/* *recorded is set once the package is in packages.db. From there a non-zero
+ * postinstall is a failure but the package stays, so an update must not undo it. */
 static int do_fresh_install(const char *stage, ini_file *ini,
-                            const char *id, const char *name, const char *types, int locked) {
+                            const char *id, const char *name, const char *types, int locked,
+                            int *recorded) {
     char dest[MAX_PATH];
     pkg_rec rec;
     int rc;
+    *recorded = 0;
     snprintf(dest, sizeof(dest), "%s/%s", NEMESIS_APPS, id);
     rc = run_named_hook(ini, stage, "preinstall");
     if (rc != 0) {
@@ -646,9 +711,30 @@ static int do_fresh_install(const char *stage, ini_file *ini,
     rec.locked = locked;
     snprintf(rec.types, sizeof(rec.types), "%s", types);
     pkg_upsert(&rec);
+    *recorded = 1;
     rc = run_named_hook(ini, dest, "postinstall");
     start_pkg_services(id);
     return rc;
+}
+
+/* An update failed before the new package was recorded: put the old one back as it
+ * was running, which the update's uninstall hooks had undone. */
+static void restore_previous(const char *id, const char *keep, const char *root) {
+    char meta[MAX_PATH];
+    ini_file ini;
+    rm_rf(root);
+    if (rename(keep, root) != 0) {
+        log_msg("update %s: could not restore the old package errno=%d", id, errno);
+        return;
+    }
+    log_msg("update %s failed; old package restored", id);
+    snprintf(meta, sizeof(meta), "%s/NEMESIS.data", root);
+    if (!is_file(meta) || ini_load(&ini, meta) != 0) return;
+    install_apks(&ini, root);
+    register_services(&ini, id, root);
+    run_named_hook(&ini, root, "postinstall");
+    ini_free(&ini);
+    start_pkg_services(id);
 }
 
 static int dir_has_meta(const char *dir) {
@@ -700,7 +786,9 @@ int cmd_install(int argc, char **argv) {
     ini_file ini;
     pkg_meta meta;
     pkg_rec existing;
-    int have_existing;
+    int have_existing, recorded = 0;
+    char keep[MAX_PATH], oldroot[MAX_PATH];
+    keep[0] = 0;
     for (i = 0; i < argc; i++) {
         if (!strcmp(argv[i], "--update")) update = 1;
         else if (!strcmp(argv[i], "--accept-risk")) accept_risk = 1;
@@ -770,7 +858,7 @@ int cmd_install(int argc, char **argv) {
             snprintf(stage, sizeof(stage), "%s", pkgroot);
     }
     if (have_existing && update) {
-        char oldroot[MAX_PATH], oldmeta[MAX_PATH];
+        char oldmeta[MAX_PATH];
         ini_file oldini;
         snprintf(oldroot, sizeof(oldroot), "%s/%s", NEMESIS_APPS, id);
         snprintf(oldmeta, sizeof(oldmeta), "%s/NEMESIS.data", oldroot);
@@ -784,12 +872,28 @@ int cmd_install(int argc, char **argv) {
         } else {
             svc_remove_prefix(id);
         }
-        rm_rf(oldroot);
+        /* Set aside on the same filesystem until the new package is recorded. */
+        snprintf(keep, sizeof(keep), "%s/update-old/%s", NEMESIS_ROOT, id);
+        rm_rf(keep);
+        {
+            char parent[MAX_PATH];
+            snprintf(parent, sizeof(parent), "%s/update-old", NEMESIS_ROOT);
+            mkdir_p(parent, 0755);
+        }
+        if (rename(oldroot, keep) != 0) {
+            log_msg("update %s: could not set the old tree aside errno=%d", id, errno);
+            keep[0] = 0;
+            rm_rf(oldroot);
+        }
         log_msg("update replacing %s", id);
     }
-    i = do_fresh_install(stage, &ini, id, meta.name, meta.types, core);
+    i = do_fresh_install(stage, &ini, id, meta.name, meta.types, core, &recorded);
     ini_free(&ini);
     rm_rf(stage_top);
+    if (keep[0]) {
+        if (recorded) rm_rf(keep);
+        else restore_previous(id, keep, oldroot);
+    }
     if (i == 0) fprintf(stdout, "ok %s %s\n", have_existing ? "updated" : "installed", id);
     return i;
 }
@@ -1126,13 +1230,22 @@ int replace_keep_attrs(const char *src, const char *dst) {
     struct stat st, want, got;
     ssize_t n;
     int fd;
+    const char *step = "copy";
     if (stat(dst, &st) != 0 || stat(src, &want) != 0) return -1;
     n = lgetxattr(dst, "security.selinux", label, sizeof(label));
     snprintf(tmp, sizeof(tmp), "%s.nemesis-new", dst);
     unlink(tmp);
+    errno = 0;
     if (copy_file(src, tmp, st.st_mode & 0777) != 0) goto fail;
+    step = "owner";
     if (chown(tmp, st.st_uid, st.st_gid) != 0 || chmod(tmp, st.st_mode & 07777) != 0) goto fail;
-    if (n > 0 && lsetxattr(tmp, "security.selinux", label, (size_t)n, 0) != 0) goto fail;
+    /* A filesystem that refuses labels cannot enforce them either. */
+    if (n > 0 && lsetxattr(tmp, "security.selinux", label, (size_t)n, 0) != 0) {
+        step = "label";
+        if (errno != EOPNOTSUPP) goto fail;
+        log_msg("replace %s: label not copied errno=%d", dst, errno);
+    }
+    step = "sync";
     fd = open(tmp, O_RDONLY);
     if (fd < 0) goto fail;
     if (fsync(fd) != 0) {
@@ -1140,11 +1253,13 @@ int replace_keep_attrs(const char *src, const char *dst) {
         goto fail;
     }
     close(fd);
+    step = "size";
     if (stat(tmp, &got) != 0 || got.st_size != want.st_size) goto fail;
+    step = "rename";
     if (rename(tmp, dst) != 0) goto fail;
     return 0;
 fail:
-    log_msg("replace %s failed errno=%d", dst, errno);
+    log_msg("replace %s failed at %s errno=%d", dst, step, errno);
     unlink(tmp);
     return -1;
 }

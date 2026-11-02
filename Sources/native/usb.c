@@ -402,24 +402,15 @@ static void do_install(const char *full, char *reply, size_t cap) {
                    nreply, sizeof(nreply));
         return;
     }
-    /* Installed, Android up: same as the Store's Update, uninstall then install. */
-    if (inst) {
-        char cmd[MAX_PATH + 64];
-        if (!usb_confirm("confirm_reinstall", full, info_id, info_name, reply, cap)) return;
-        /* info_id matched packages.db, so it is a validated id and safe to quote. */
-        snprintf(cmd, sizeof(cmd), "%s uninstall '%s'", BIN_PATH, info_id);
-        if (run_cmd(cmd) != 0) {
-            log_msg("usb reinstall %s: uninstall failed", info_id);
-            usb_notify("result_fail", full, info_id, info_name, nreply, sizeof(nreply));
-            return;
-        }
-    } else if (!usb_confirm("confirm_install", full, info_id, info_name, reply, cap)) {
+    /* Installed, Android up: --update refuses a bad package before it changes anything,
+     * and puts the old package back if the new one fails. */
+    if (!usb_confirm(inst ? "confirm_reinstall" : "confirm_install", full, info_id, info_name, reply, cap))
         return;
-    }
     {
         char cmd[MAX_PATH + 64];
+        const char *update = inst ? "--update " : "";
         int rc;
-        snprintf(cmd, sizeof(cmd), "%s install '%s'", BIN_PATH, full);
+        snprintf(cmd, sizeof(cmd), "%s install %s'%s'", BIN_PATH, update, full);
         rc = run_cmd(cmd);
         /* Not marked compatible: only a user on screen may accept the risk. */
         if (rc == 20 && framework_up()) {
@@ -427,7 +418,7 @@ static void do_install(const char *full, char *reply, size_t cap) {
             am_dialog("confirm_risk", full, info_id, info_name);
             if (wait_reply(rreply, sizeof(rreply), USB_PROMPT_SEC) == 0 && reply_yes(rreply)) {
                 log_msg("install %s: user accepted compatibility risk", info_id);
-                snprintf(cmd, sizeof(cmd), "%s install --accept-risk '%s'", BIN_PATH, full);
+                snprintf(cmd, sizeof(cmd), "%s install %s--accept-risk '%s'", BIN_PATH, update, full);
                 rc = run_cmd(cmd);
             } else {
                 log_msg("install %s: compatibility risk declined", info_id);
@@ -737,10 +728,10 @@ int cmd_usb_handler(void) {
                     do_install(full, reply, sizeof(reply));
                 }
             }
-            ini_free(&ini);
             handled = 1;
             have_ident = usb_ident_of(meta, &last_id) == 0;
             log_handled(type, rel, reply);
+            ini_free(&ini);
         }
         sleep(1);
     }

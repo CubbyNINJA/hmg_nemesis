@@ -427,8 +427,12 @@ static int restore_backup(const char *bak, const int *had, int have_qb, const ch
         }
     }
     if (have_qb) {
+        char saved[33], live[33];
         snprintf(p, sizeof(p), "%s/qb_runtime.sh", bak);
-        if (replace_keep_attrs(p, QB_RUNTIME) != 0) bad = 1;
+        md5_file_hex(p, saved);
+        md5_file_hex(QB_RUNTIME, live);
+        /* A file the update never reached is already right. */
+        if ((!saved[0] || strcmp(saved, live)) && replace_keep_attrs(p, QB_RUNTIME) != 0) bad = 1;
     }
     if (added_ca && added_ca[0]) cacerts_remove_owned(added_ca);
     sync();

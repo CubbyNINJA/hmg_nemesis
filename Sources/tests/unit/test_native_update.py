@@ -475,7 +475,6 @@ def test_a_restore_also_puts_the_quickboot_file_back(installed):
     assert qb.read_text() == "stock\n" + OLD_HOOK
 
 
-@known_bug("G27", "a label that cannot be copied fails the whole update, as errno 95 did on a real unit")
 def test_a_filesystem_that_refuses_labels_does_not_stop_the_update(installed):
     """Given a unit where the QuickBoot file's label can be read but not set
     When an update replaces the hook
@@ -490,7 +489,6 @@ def test_a_filesystem_that_refuses_labels_does_not_stop_the_update(installed):
     assert qb.read_text() == "stock\n" + HOOK
 
 
-@known_bug("G28", "the restore rewrites a QuickBoot file the update never changed, and reports that failure")
 def test_a_restore_does_not_fail_over_a_file_that_never_changed(installed):
     """Given a failed update that never touched the QuickBoot file, on a unit that refuses labels
     When the restore runs
