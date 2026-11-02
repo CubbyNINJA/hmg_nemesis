@@ -7,8 +7,9 @@ after a power cycle, instead of the car defaulting back to Eco/Normal.
 > powertrain control, and Strategy A in this guide commands a drive-mode change. This document is
 > a discovery and design record only: nothing in Phase 2A may be built or shipped until the
 > maintainer has ruled on whether a drive-mode request made through the same interface the stock
-> UI uses falls inside `SCOPE.md`. Phase 1 (observation only) and Phase 2B (no actuation) are
-> unaffected by this gate.
+> UI uses falls inside `SCOPE.md`. The same gate covers anything else that changes the mode: key
+> injection in Phase 2B, and the `setprop` and `input keyevent` tests in Phase 1.2. Observing the
+> mode, logging it, and showing the driver a reminder are unaffected.
 
 > **Read first:** the drive-mode selector on Gen5W is a *vehicle* function. The head unit (HU)
 > is a passenger on the CAN bus — it may only *observe* the mode, or it may be able to
@@ -33,6 +34,20 @@ after a power cycle, instead of the car defaulting back to Eco/Normal.
 
 Every question must be answered with evidence from the unit. Record answers in a notes file
 (e.g. `docs/notes/drive-mode-discovery.md`); the package design depends on them.
+
+`Sources/examples/usb-stick-drive-mode-discovery/` answers 1.1 without a shell. It only reads and
+lists, and it saves to the stick.
+
+1. Copy `NEMESIS.data` and `NEMESIS.sh` to the top level of a blank FAT32 or exFAT stick.
+2. Park the car with the parking brake on, and turn it on so the drive-mode button works.
+3. Insert the stick and tap **Yes**. The capture runs for about two minutes.
+4. Press the drive-mode button once every 15 seconds or so, through every mode, including a custom
+   profile if the car has one. Write down the order and roughly when you started.
+5. A dialog appears when it finishes. Then remove the stick.
+6. On your PC, run `python3 analyze.py <drive-mode-discovery-folder>`, then read `summary.txt`.
+
+It masks serial numbers, MAC addresses and VINs in `summary.txt`. The raw files are not masked,
+and the log can hold phone and network names, so share the summary rather than the folder.
 
 ### 1.1 How does the HU learn the current drive mode?
 
