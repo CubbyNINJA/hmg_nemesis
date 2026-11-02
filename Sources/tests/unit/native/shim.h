@@ -92,15 +92,22 @@ int shim_chown(const char *path, uid_t owner, gid_t group);
 int shim_kill(pid_t pid, int sig);
 ssize_t shim_lgetxattr(const char *path, const char *name, void *value, size_t size);
 int shim_lsetxattr(const char *path, const char *name, const void *value, size_t size, int flags);
+int shim_open(const char *path, int flags, ...);
+FILE *shim_fopen(const char *path, const char *mode);
+int shim_link(const char *from, const char *to);
+pid_t shim_fork(void);
+pid_t shim_waitpid(pid_t pid, int *status, int options);
 int shim_execl(const char *path, const char *arg0, ...);
 int shim_execv(const char *path, char *const argv[]);
 void shim_exit(int code) __attribute__((noreturn));
 
 /* Names that take a literal unit path. Glibc's declarations are already included above. */
-#define open(path, ...) open(shim_path(path), __VA_ARGS__)
-#define fopen(path, mode) fopen(shim_path(path), mode)
+#define open(path, ...) shim_open(shim_path(path), __VA_ARGS__)
+#define fopen(path, mode) shim_fopen(shim_path(path), mode)
 #define unlink(path) unlink(shim_path(path))
-#define link(from, to) link(shim_path(from), shim_path(to))
+#define link(from, to) shim_link(shim_path(from), shim_path(to))
+#define fork() shim_fork()
+#define waitpid(pid, status, options) shim_waitpid(pid, status, options)
 #define opendir(path) opendir(shim_path(path))
 #define stat(path, st) stat(shim_path(path), st)
 #define chown(path, owner, group) shim_chown(path, owner, group)

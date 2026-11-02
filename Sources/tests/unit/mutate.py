@@ -114,7 +114,7 @@ C_OPS = [
     (r" >= ", " > "),
 ]
 HOOK_TESTS = ["test_hooks.py", "test_hook_faults.py"]
-UPDATE_TESTS = ["test_native_update.py", "test_native_compat.py"]
+UPDATE_TESTS = ["test_native_update.py", "test_native_compat.py", "test_native_hardening.py"]
 NATIVE_TESTS = [*UPDATE_TESTS, "test_native_packages.py", "test_native_edges.py", "test_native_runtime.py", "test_native_properties.py"]
 TARGETS = [
     ("Sources/tools/make_nemesis_package.py", PY_OPS, ["test_builder.py", "test_properties.py", "test_native_compat.py", "-k", "not adb and not uninstall and not install"], None),
@@ -146,6 +146,9 @@ def generate(only):
                 continue
             if region and active and line.strip() == "};" or region and active and "mkdir_p(NEMESIS_BINDIR" in line:
                 active = False
+            # A docstring's last line, where a change to the words cannot change behaviour.
+            if ops is PY_OPS and '"""' in line:
+                continue
             if not active or (rel.endswith(".sh") and line.lstrip().startswith("#")):
                 continue
             # Comments, preprocessor lines and string continuations such as the mount wrapper.

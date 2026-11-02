@@ -8,6 +8,7 @@
 #include <string.h>
 #include <sys/stat.h>
 #include <sys/types.h>
+#include <sys/wait.h>
 #include <sys/xattr.h>
 #include <unistd.h>
 
@@ -83,6 +84,75 @@ int shim_chown(const char *path, uid_t owner, gid_t group) {
     (void)owner;
     (void)group;
     return access(TEST_ROOT "/chown_fails", F_OK) == 0 ? -1 : 0;
+}
+
+/* Failures a test cannot cause from outside. A file under TEST_ROOT turns one on: fail_fork,
+ * fail_waitpid and fail_link have no contents, and fail_open and fail_exec hold text that a path must
+ * contain, with fail_exec reporting EACCES. */
+static int fault_on(const char *name) {
+    char path[1024];
+    snprintf(path, sizeof(path), "%s/%s", TEST_ROOT, name);
+    return access(path, F_OK) == 0;
+}
+
+static int fault_matches(const char *name, const char *target) {
+    char path[1024], want[256];
+    ssize_t n;
+    int fd;
+    snprintf(path, sizeof(path), "%s/%s", TEST_ROOT, name);
+    fd = open(path, O_RDONLY);
+    if (fd < 0) return 0;
+    n = read(fd, want, sizeof(want) - 1);
+    close(fd);
+    if (n <= 0) return 0;
+    want[n] = 0;
+    want[strcspn(want, "\n")] = 0;
+    return want[0] && target && strstr(target, want);
+}
+
+int shim_open(const char *path, int flags, ...) {
+    va_list ap;
+    int mode;
+    if (fault_matches("fail_open", path)) {
+        errno = EACCES;
+        return -1;
+    }
+    va_start(ap, flags);
+    mode = va_arg(ap, int);
+    va_end(ap);
+    return open(path, flags, mode);
+}
+
+FILE *shim_fopen(const char *path, const char *mode) {
+    if (fault_matches("fail_open", path)) {
+        errno = EACCES;
+        return NULL;
+    }
+    return fopen(path, mode);
+}
+
+int shim_link(const char *from, const char *to) {
+    if (fault_on("fail_link")) {
+        errno = EPERM;
+        return -1;
+    }
+    return link(from, to);
+}
+
+pid_t shim_fork(void) {
+    if (fault_on("fail_fork")) {
+        errno = EAGAIN;
+        return -1;
+    }
+    return fork();
+}
+
+pid_t shim_waitpid(pid_t pid, int *status, int options) {
+    if (fault_on("fail_waitpid")) {
+        errno = EINTR;
+        return -1;
+    }
+    return waitpid(pid, status, options);
 }
 
 /* A file named labels_refused acts like a unit where a label can be read but not set, which
@@ -163,6 +233,10 @@ static const char *exec_target(const char *path) {
 }
 
 int shim_execv(const char *path, char *const argv[]) {
+    if (fault_matches("fail_exec", path)) {
+        errno = EACCES;
+        return -1;
+    }
     flush_coverage();
     return execv(exec_target(path), argv);
 }
