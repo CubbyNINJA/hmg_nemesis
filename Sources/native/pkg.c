@@ -104,6 +104,7 @@ int pkg_save_all(pkg_rec *list, int n) {
     snprintf(tmp, sizeof(tmp), "%s.%d", PACKAGES_DB, (int)getpid());
     f = fopen(tmp, "w");
     if (!f) return -1;
+    fchmod(fileno(f), 0644);
     for (i = 0; i < n; i++) {
         fprintf(f, "%s|%s|%d|%s\n", list[i].id, list[i].name, list[i].locked, list[i].types);
     }
@@ -214,6 +215,7 @@ int svc_save_all(svc_rec *list, int n) {
     snprintf(tmp, sizeof(tmp), "%s.%d", SERVICES_DB, (int)getpid());
     f = fopen(tmp, "w");
     if (!f) return -1;
+    fchmod(fileno(f), 0644);
     for (i = 0; i < n; i++) {
         fprintf(f, "%s|%s|%s|%s|%s\n", list[i].qname, list[i].kind, list[i].path, list[i].uid, list[i].mode);
     }
@@ -256,6 +258,42 @@ static int hook_path(char *out, size_t cap, const char *root, const char *rel) {
     return 1;
 }
 
+/* A path that climbs out of the package. Absolute paths are allowed on purpose. */
+static int has_parent_step(const char *path) {
+    const char *p = path;
+    while (p && (p = strstr(p, ".."))) {
+        if ((p == path || p[-1] == '/') && (p[2] == 0 || p[2] == '/')) return 1;
+        p += 2;
+    }
+    return 0;
+}
+
+/* Fields stored in pipe-separated, one-line database rows. */
+static int breaks_db_row(const char *s) {
+    return s && strpbrk(s, "|\r\n") != NULL;
+}
+
+/* Returns a description of what the descriptor must not contain, or NULL. */
+static const char *manifest_problem(const ini_file *ini, const pkg_meta *m) {
+    static const char *const hooks[] = {"preinstall", "postinstall", "preuninstall", "postuninstall"};
+    static const char *const svc_keys[] = {"name", "kind", "path", "uid", "mode"};
+    size_t k;
+    int i;
+    if (breaks_db_row(m->name) || breaks_db_row(m->types)) return "name and type must not hold | or a line break";
+    for (k = 0; k < sizeof(hooks) / sizeof(hooks[0]); k++)
+        if (has_parent_step(ini_get(ini, "nemesis", hooks[k]))) return "a hook path must not use ..";
+    for (i = 0; i < 32; i++) {
+        char sec[32];
+        snprintf(sec, sizeof(sec), "app.%d", i);
+        if (has_parent_step(ini_get(ini, sec, "path"))) return "an app path must not use ..";
+        snprintf(sec, sizeof(sec), "service.%d", i);
+        if (has_parent_step(ini_get(ini, sec, "path"))) return "a service path must not use ..";
+        for (k = 0; k < sizeof(svc_keys) / sizeof(svc_keys[0]); k++)
+            if (breaks_db_row(ini_get(ini, sec, svc_keys[k]))) return "a service field must not hold | or a line break";
+    }
+    return NULL;
+}
+
 int load_zip_meta(const char *zip, ini_file *ini, pkg_meta *m) {
     char text[16384], err[128];
     memset(ini, 0, sizeof(*ini));
@@ -276,6 +314,14 @@ int load_zip_meta(const char *zip, ini_file *ini, pkg_meta *m) {
         fprintf(stderr, "invalid package id\n");
         ini_free(ini);
         return -1;
+    }
+    {
+        const char *why = manifest_problem(ini, m);
+        if (why) {
+            fprintf(stderr, "invalid package metadata: %s\n", why);
+            ini_free(ini);
+            return -1;
+        }
     }
     return 0;
 }
@@ -459,6 +505,7 @@ static int pm_install_apk(const char *apk, const char *apkid) {
                 if (guard == 0) {
                     char c;
                     close(gp[1]);
+                    setsid();
                     signal(SIGHUP, SIG_IGN);
                     signal(SIGTERM, SIG_IGN);
                     if (read(gp[0], &c, 1) <= 0) __system_property_set("sys.boot_completed", prev);
@@ -596,7 +643,10 @@ static int start_pkg_services(const char *id) {
     snprintf(prefix, sizeof(prefix), "%s/", id);
     svc_list_load(&list, &n);
     for (i = 0; i < n; i++) {
-        if (!strncmp(list[i].qname, prefix, strlen(prefix))) svc_start(list[i].qname);
+        if (!strncmp(list[i].qname, prefix, strlen(prefix))) {
+            svc_clear_stopped(list[i].qname);
+            svc_start(list[i].qname);
+        }
     }
     free(list);
     return 0;
@@ -609,7 +659,11 @@ static int stop_pkg_services(const char *id) {
     snprintf(prefix, sizeof(prefix), "%s/", id);
     svc_list_load(&list, &n);
     for (i = 0; i < n; i++) {
-        if (!strncmp(list[i].qname, prefix, strlen(prefix))) svc_stop(list[i].qname);
+        /* Marked first, so the service manager cannot restart it during the hooks. */
+        if (!strncmp(list[i].qname, prefix, strlen(prefix))) {
+            svc_mark_stopped(list[i].qname);
+            svc_stop(list[i].qname);
+        }
     }
     free(list);
     return 0;
@@ -677,11 +731,56 @@ static int uninstall_tree(const char *id, int allow_locked, int force) {
     return 0;
 }
 
+/* A zip can name the manifest in any case, and everything after install looks for
+ * this exact name. */
+static void normalize_manifest_name(const char *root) {
+    DIR *d = opendir(root);
+    struct dirent *e;
+    if (!d) return;
+    while ((e = readdir(d))) {
+        if (!strcasecmp(e->d_name, "NEMESIS.data") && strcmp(e->d_name, "NEMESIS.data")) {
+            char from[MAX_PATH], to[MAX_PATH];
+            snprintf(from, sizeof(from), "%s/%s", root, e->d_name);
+            snprintf(to, sizeof(to), "%s/NEMESIS.data", root);
+            if (rename(from, to) != 0) log_msg("rename %s failed errno=%d", from, errno);
+            break;
+        }
+    }
+    closedir(d);
+}
+
+/* Held while an old package is set aside, so nothing mistakes a running update for
+ * one that died. Closed on exec, because hooks may run nemesis themselves. */
+static int update_lock_fd = -1;
+
+static int update_lock_try(void) {
+    char path[MAX_PATH];
+    int fd;
+    if (update_lock_fd >= 0) return 0;
+    snprintf(path, sizeof(path), "%s/update.lock", NEMESIS_ROOT);
+    fd = open(path, O_CREAT | O_RDWR, 0644);
+    if (fd < 0) return -1;
+    fcntl(fd, F_SETFD, FD_CLOEXEC);
+    if (flock(fd, LOCK_EX | LOCK_NB) != 0) {
+        close(fd);
+        return -1;
+    }
+    update_lock_fd = fd;
+    return 0;
+}
+
+static void update_lock_release(void) {
+    if (update_lock_fd >= 0) close(update_lock_fd);
+    update_lock_fd = -1;
+}
+
 /* *recorded is set once the package is in packages.db. From there a non-zero
- * postinstall is a failure but the package stays, so an update must not undo it. */
+ * postinstall is a failure but the package stays, so an update must not undo it.
+ * keep is the old tree. It goes before postinstall, because shipped packages
+ * reboot there and this process never gets further. */
 static int do_fresh_install(const char *stage, ini_file *ini,
                             const char *id, const char *name, const char *types, int locked,
-                            int *recorded) {
+                            const char *keep, int *recorded) {
     char dest[MAX_PATH];
     pkg_rec rec;
     int rc;
@@ -698,6 +797,7 @@ static int do_fresh_install(const char *stage, ini_file *ini,
         log_msg("copy tree failed %s -> %s", stage, dest);
         return 1;
     }
+    normalize_manifest_name(dest);
     if (install_apks(ini, dest) != 0) {
         pm_uninstall_apks(ini, dest);
         rm_rf(dest);
@@ -712,29 +812,64 @@ static int do_fresh_install(const char *stage, ini_file *ini,
     snprintf(rec.types, sizeof(rec.types), "%s", types);
     pkg_upsert(&rec);
     *recorded = 1;
+    if (keep && keep[0]) rm_rf(keep);
+    update_lock_release();
     rc = run_named_hook(ini, dest, "postinstall");
     start_pkg_services(id);
     return rc;
 }
 
 /* An update failed before the new package was recorded: put the old one back as it
- * was running, which the update's uninstall hooks had undone. */
+ * was running, which the update's uninstall hooks had undone. A package whose
+ * postinstall reboots does so here too. */
 static void restore_previous(const char *id, const char *keep, const char *root) {
     char meta[MAX_PATH];
     ini_file ini;
+    int rc;
     rm_rf(root);
     if (rename(keep, root) != 0) {
         log_msg("update %s: could not restore the old package errno=%d", id, errno);
         return;
     }
-    log_msg("update %s failed; old package restored", id);
+    log_msg("update %s failed; old package tree restored", id);
     snprintf(meta, sizeof(meta), "%s/NEMESIS.data", root);
-    if (!is_file(meta) || ini_load(&ini, meta) != 0) return;
-    install_apks(&ini, root);
+    if (!is_file(meta) || ini_load(&ini, meta) != 0) {
+        log_msg("update %s: restored package has no readable metadata", id);
+        return;
+    }
+    if (install_apks(&ini, root) != 0) log_msg("update %s: restored package's APKs failed", id);
     register_services(&ini, id, root);
-    run_named_hook(&ini, root, "postinstall");
+    rc = run_named_hook(&ini, root, "postinstall");
+    if (rc != 0) log_msg("update %s: restored package's postinstall exited %d", id, rc);
     ini_free(&ini);
     start_pkg_services(id);
+}
+
+/* An old tree still set aside means an update died before recording the new
+ * package, as in a power cut. The caller holds the update lock. */
+static void recover_updates(void) {
+    char dir[MAX_PATH];
+    DIR *d;
+    struct dirent *e;
+    snprintf(dir, sizeof(dir), "%s/update-old", NEMESIS_ROOT);
+    d = opendir(dir);
+    if (!d) return;
+    while ((e = readdir(d))) {
+        char keep[MAX_PATH], root[MAX_PATH];
+        if (e->d_name[0] == '.') continue;
+        snprintf(keep, sizeof(keep), "%s/%s", dir, e->d_name);
+        snprintf(root, sizeof(root), "%s/%s", NEMESIS_APPS, e->d_name);
+        log_msg("update of %s did not finish; restoring the old package", e->d_name);
+        restore_previous(e->d_name, keep, root);
+    }
+    closedir(d);
+}
+
+/* For the service manager at boot. */
+void pkg_recover_updates(void) {
+    if (update_lock_try() != 0) return;
+    recover_updates();
+    update_lock_release();
 }
 
 static int dir_has_meta(const char *dir) {
@@ -786,7 +921,7 @@ int cmd_install(int argc, char **argv) {
     ini_file ini;
     pkg_meta meta;
     pkg_rec existing;
-    int have_existing, recorded = 0;
+    int have_existing, recorded = 0, locked_update;
     char keep[MAX_PATH], oldroot[MAX_PATH];
     keep[0] = 0;
     for (i = 0; i < argc; i++) {
@@ -804,6 +939,8 @@ int cmd_install(int argc, char **argv) {
         return 1;
     }
     ensure_dirs();
+    locked_update = update_lock_try() == 0;
+    if (locked_update) recover_updates();
     if (load_zip_meta(zip, &ini, &meta) != 0) return 1;
     id = meta.id;
     have_existing = pkg_find(id, &existing) == 0;
@@ -857,6 +994,13 @@ int cmd_install(int argc, char **argv) {
         if (strcmp(pkgroot, stage))
             snprintf(stage, sizeof(stage), "%s", pkgroot);
     }
+    if (have_existing && update && !locked_update) {
+        /* Its old tree could be the only good copy, so this one must wait. */
+        fprintf(stderr, "another update is running\n");
+        ini_free(&ini);
+        rm_rf(stage_top);
+        return 1;
+    }
     if (have_existing && update) {
         char oldmeta[MAX_PATH];
         ini_file oldini;
@@ -887,13 +1031,11 @@ int cmd_install(int argc, char **argv) {
         }
         log_msg("update replacing %s", id);
     }
-    i = do_fresh_install(stage, &ini, id, meta.name, meta.types, core, &recorded);
+    i = do_fresh_install(stage, &ini, id, meta.name, meta.types, core, keep, &recorded);
     ini_free(&ini);
     rm_rf(stage_top);
-    if (keep[0]) {
-        if (recorded) rm_rf(keep);
-        else restore_previous(id, keep, oldroot);
-    }
+    if (keep[0] && !recorded) restore_previous(id, keep, oldroot);
+    update_lock_release();
     if (i == 0) fprintf(stdout, "ok %s %s\n", have_existing ? "updated" : "installed", id);
     return i;
 }
@@ -901,9 +1043,10 @@ int cmd_install(int argc, char **argv) {
 int cmd_uninstall(int argc, char **argv) {
     const char *id = NULL;
     int i, force = 0, rc;
+    /* An id may start with a dash, so --force is the only option. */
     for (i = 0; i < argc; i++) {
         if (!strcmp(argv[i], "--force")) force = 1;
-        else if (argv[i][0] != '-') id = argv[i];
+        else id = argv[i];
     }
     if (!id || !*id) {
         fprintf(stderr, "usage: nemesis uninstall [--force] <package-id>\n");
@@ -1052,13 +1195,14 @@ int cmd_pkg_launch(const char *id) {
     }
     for (i = 0; i < 32; i++) {
         char sec[32], script[MAX_PATH], cmd[MAX_PATH + 80];
-        const char *kind, *path, *comp, *pkg;
+        const char *kind, *path, *comp, *pkg, *uid;
         snprintf(sec, sizeof(sec), "app.%d", i);
         if (!ini_has_section(&ini, sec)) continue;
         kind = ini_get(&ini, sec, "kind");
         path = ini_get(&ini, sec, "path");
         comp = ini_get(&ini, sec, "component");
         pkg = ini_get(&ini, sec, "package");
+        uid = ini_get(&ini, sec, "uid");
         if ((comp && *comp) || (pkg && *pkg)) {
             char apkid[160], apk[MAX_PATH];
             const char *shown = (comp && *comp) ? comp : pkg;
@@ -1099,7 +1243,7 @@ int cmd_pkg_launch(const char *id) {
         } else if (kind && !strcmp(kind, "sh") && path && *path) {
             if (path[0] == '/') snprintf(script, sizeof(script), "%s", path);
             else snprintf(script, sizeof(script), "%s/%s", root, path);
-            run_script(script, root, "root");
+            run_script(script, root, uid ? uid : "root");
             launched = 1;
         }
     }

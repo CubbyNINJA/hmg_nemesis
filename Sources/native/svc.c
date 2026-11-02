@@ -61,12 +61,49 @@ static void svc_set_fails(const char *qname, int n) {
     write_file(p, b, 0644);
 }
 
+/* Markers in tmpfs last until a reboot and survive a service manager restart. */
+static void svc_marker(char *out, size_t cap, const char *kind, const char *qname) {
+    char p[MAX_PATH];
+    const char *base;
+    pid_path_for(p, sizeof(p), qname);
+    base = strrchr(p, '/');
+    snprintf(out, cap, "/dev/.nemesis-%s-%s", kind, base ? base + 1 : p);
+}
+
+void svc_mark_stopped(const char *qname) {
+    char m[MAX_PATH];
+    svc_marker(m, sizeof(m), "stopped", qname);
+    write_file(m, "1\n", 0644);
+}
+
+static void svc_clear_marker(const char *kind, const char *qname) {
+    char m[MAX_PATH];
+    svc_marker(m, sizeof(m), kind, qname);
+    unlink(m);
+}
+
+void svc_clear_stopped(const char *qname) {
+    svc_clear_marker("stopped", qname);
+}
+
+static int svc_has_marker(const char *kind, const char *qname) {
+    char m[MAX_PATH];
+    int fd;
+    svc_marker(m, sizeof(m), kind, qname);
+    fd = open(m, O_RDONLY);
+    if (fd < 0) return 0;
+    close(fd);
+    return 1;
+}
+
 /* Install and uninstall start a service with a clean crash count. */
 void svc_forget(const char *qname) {
     char p[MAX_PATH];
     pid_path_for(p, sizeof(p), qname);
     strcat(p, ".fails");
     unlink(p);
+    svc_clear_marker("stopped", qname);
+    svc_clear_marker("deferred", qname);
 }
 
 static int svc_locked(const char *qname) {
@@ -122,6 +159,8 @@ int svc_start_ex(const char *qname, int manual) {
         fprintf(stderr, "unknown service %s\n", qname);
         return 1;
     }
+    /* The service manager's own restarts must not undo a stop that lands just after its check. */
+    if (manual) svc_clear_marker("stopped", qname);
     if (svc_proc_ok(&s)) return 0;
     if (!svc_locked(qname) && svc_fails(qname) >= RESTART_LIMIT && !strcmp(s.mode, "restart")) {
         if (!manual) {
@@ -138,8 +177,14 @@ int svc_start_ex(const char *qname, int manual) {
     }
     if (!strcmp(s.kind, "instance") && !framework_up()) {
         log_msg("defer instance %s (android down)", qname);
+        {
+            char m[MAX_PATH];
+            svc_marker(m, sizeof(m), "deferred", qname);
+            write_file(m, "1\n", 0644);
+        }
         return 0;
     }
+    svc_clear_marker("deferred", qname);
     pid = fork();
     if (pid < 0) return 1;
     if (pid == 0) {
@@ -231,7 +276,12 @@ int cmd_service(int argc, char **argv) {
     }
     name = argv[1];
     if (!strcmp(op, "start")) return svc_start_ex(name, 1);
-    if (!strcmp(op, "stop")) return svc_stop(name);
+    if (!strcmp(op, "stop")) {
+        svc_rec s;
+        /* It stays stopped until the next start or reboot. The locked core always runs. */
+        if (find_svc(name, &s) == 0 && !svc_locked(name)) svc_mark_stopped(name);
+        return svc_stop(name);
+    }
     if (!strcmp(op, "status")) return svc_status(name);
     fprintf(stderr, "unknown service op %s\n", op);
     return 1;
@@ -252,6 +302,7 @@ int cmd_svcmgr(void) {
     ignore_hup_pipe();
     ensure_dirs();
     seed_core_packages();
+    pkg_recover_updates();
     write_pidfile(SM_PIDFILE, getpid());
     log_msg("svcmgr start pid=%d", (int)getpid());
     /* launch all registered services */
@@ -261,6 +312,7 @@ int cmd_svcmgr(void) {
         svc_list_load(&list, &n);
         for (i = 0; i < n; i++) {
             if (!strcmp(list[i].mode, "once")) continue;
+            if (svc_has_marker("stopped", list[i].qname)) continue;
             svc_start(list[i].qname);
         }
         free(list);
@@ -276,7 +328,7 @@ int cmd_svcmgr(void) {
         }
         svc_list_load(&list, &n);
         for (i = 0; i < n; i++) {
-            if (!strcmp(list[i].mode, "once")) continue;
+            if (!strcmp(list[i].mode, "once") && !svc_has_marker("deferred", list[i].qname)) continue;
             if (svc_proc_ok(&list[i])) {
                 /* A crash loop can look alive between two polls. Only a
                  * process that stayed up clears the count. */
@@ -288,6 +340,12 @@ int cmd_svcmgr(void) {
                 continue;
             }
             if (!strcmp(list[i].kind, "instance") && !framework_up()) continue;
+            if (svc_has_marker("stopped", list[i].qname)) continue;
+            if (svc_has_marker("deferred", list[i].qname)) {
+                svc_clear_marker("deferred", list[i].qname);
+                svc_start(list[i].qname);
+                continue;
+            }
             if (!strcmp(list[i].mode, "background")) continue;
             if (!strcmp(list[i].mode, "restart")) {
                 if (svc_locked(list[i].qname)) {

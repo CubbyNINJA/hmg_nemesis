@@ -206,6 +206,9 @@ int cmd_svcmgr(void);
 int svc_start(const char *qname);
 int svc_start_ex(const char *qname, int manual);
 void svc_forget(const char *qname);
+void svc_mark_stopped(const char *qname);
+void svc_clear_stopped(const char *qname);
+void pkg_recover_updates(void);
 int svc_stop(const char *qname);
 int svc_status(const char *qname);
 

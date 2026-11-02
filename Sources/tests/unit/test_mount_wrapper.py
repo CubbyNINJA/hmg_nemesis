@@ -59,13 +59,14 @@ def test_everything_else_reaches_real_mount(run, args):
     assert run(*args.split()) == f"REAL {args}".strip()
 
 
-@known_bug("G17", "wrapper's outer case needs a space before remount, so option order matters")
 @pytest.mark.parametrize(
     "args,expected",
     [
         ("-o rw,remount /system", "NEMESIS remount rw"),
         ("-o ro,remount /system", "NEMESIS remount ro"),
         ("-o rw,remount /", "NEMESIS remount rw"),
+        ("-oro,remount /system", "NEMESIS remount ro"),
+        ("-oremount,ro /system", "NEMESIS remount ro"),
     ],
 )
 def test_option_order_does_not_matter(run, args, expected):

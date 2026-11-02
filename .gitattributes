@@ -1,0 +1,7 @@
+# Scripts and manifests run on the head unit, whose shell reads CR as part of a command.
+*.sh text eol=lf
+NEMESIS.* text eol=lf
+*.apk binary
+*.so binary
+*.tar binary
+*.zip binary

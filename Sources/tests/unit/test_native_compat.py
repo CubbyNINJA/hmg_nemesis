@@ -366,7 +366,6 @@ def test_a_range_too_long_to_compare_is_refused(nem):
     assert info(nem, "[nemesis]\nid=my.tool\ndepends=other@" + "1" * 32 + "-2\n").returncode != 0
 
 
-@known_bug("G29", "the builder has no length limit on a range, so it builds a package the unit refuses")
 def test_the_builder_refuses_a_range_too_long_for_the_unit(tmp_path):
     folder = tmp_path / "pkg"
     folder.mkdir()

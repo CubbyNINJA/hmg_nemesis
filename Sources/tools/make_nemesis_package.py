@@ -11,6 +11,7 @@ SHORT_MAX = 64
 DETAIL_MAX = 256
 VER_RE = re.compile(r"^\d+(\.\d+)*$")
 ID_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9._-]{0,63}$")
+RANGE_LOW_MAX = 32  # The unit holds a range's lower bound in a 32-byte buffer (native/meta.c).
 
 
 def parse_ini(text: str) -> dict[tuple[str, str], str]:
@@ -89,22 +90,49 @@ def spec_ok(spec: str) -> bool:
         return bool(VER_RE.match(spec[2:]))
     if "-" in spec:
         lo, _, hi = spec.partition("-")
-        return bool(VER_RE.match(lo) and VER_RE.match(hi))
+        return len(lo) < RANGE_LOW_MAX and bool(VER_RE.match(lo) and VER_RE.match(hi))
     return bool(VER_RE.match(spec))
+
+
+def has_parent_step(path: str) -> bool:
+    return ".." in path.replace("\\", "/").split("/")
+
+
+def path_errors(kv: dict[tuple[str, str], str], src: Path) -> list[str]:
+    """Hook, app and service paths, which the unit would otherwise fail on later."""
+    named = [("nemesis", key) for key in ("preinstall", "postinstall", "preuninstall", "postuninstall")]
+    named += [(sec, "path") for sec, _ in kv if sec.startswith(("app.", "service."))]
+    errors = []
+    for sec, key in dict.fromkeys(named):
+        path = kv.get((sec, key))
+        # An instance service's path is an Android component, not a file.
+        if not path or path == "N/A" or kv.get((sec, "kind")) == "instance":
+            continue
+        if has_parent_step(path):
+            errors.append(f"[{sec}] {key} must not use ..: {path}")
+        elif not path.startswith("/") and not (src / path).is_file():
+            errors.append(f"[{sec}] {key} is not in the package: {path}")
+    return errors
 
 
 def validate(meta_path: Path) -> list[str]:
     """Returns warnings; raises SystemExit on errors the head unit would reject."""
     warnings: list[str] = []
     try:
-        kv = parse_ini(meta_path.read_bytes().decode("utf-8"))
+        kv = parse_ini(meta_path.read_bytes().decode("utf-8-sig"))
     except (UnicodeDecodeError, ValueError) as e:
         raise SystemExit(f"{meta_path}: {e}")
 
     def get(key: str) -> str | None:
         return kv.get(("nemesis", key))
 
-    errors = []
+    errors = path_errors(kv, meta_path.parent)
+    for key in ("name", "type", "types"):
+        if any(c in (get(key) or "") for c in "|\r\n"):
+            errors.append(f"{key} must not hold | or a line break")
+    for (sec, key), val in kv.items():
+        if sec.startswith("service.") and key in ("name", "kind", "path", "uid", "mode") and any(c in val for c in "|\r\n"):
+            errors.append(f"[{sec}] {key} must not hold | or a line break")
     ver = get("version") or "1.0"
     if not VER_RE.match(ver):
         errors.append(f"bad version={ver}")
@@ -152,11 +180,19 @@ def main() -> None:
         raise SystemExit(f"missing {meta}")
     for w in validate(meta):
         print(f"warning: {meta}: {w}")
-    out = args.output or (src.parent / f"{src.name}.zip")
+    out = (args.output or (src.parent / f"{src.name}.zip")).resolve()
     with zipfile.ZipFile(out, "w", compression=zipfile.ZIP_DEFLATED) as z:
         for p in sorted(src.rglob("*")):
-            if p.is_file():
-                z.write(p, p.relative_to(src).as_posix())
+            if not p.is_file() or p.resolve() == out:
+                continue
+            name = p.relative_to(src).as_posix()
+            data = p.read_bytes()
+            # The unit's shell reads a carriage return as part of the command.
+            if p.suffix == ".sh" and data.startswith(b"#!") and b"\r" in data:
+                print(f"warning: {name}: removed carriage returns")
+                z.writestr(name, data.replace(b"\r\n", b"\n").replace(b"\r", b"\n"))
+            else:
+                z.write(p, name)
     print(f"Wrote {out} ({out.stat().st_size} bytes)")
 
 

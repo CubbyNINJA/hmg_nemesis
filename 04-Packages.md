@@ -99,7 +99,9 @@ Sections `[service.0]`, `[service.1]`, … Registry name is **`<package-id>/<nam
 | `uid` | `root` (default) or `system` (uid/gid 1000) |
 | `mode` | `restart` — svcmgr restarts when the pid dies. Ordinary packages stop after 5 rapid deaths; the locked `usb-handler` is always restarted. `background` — start once, no restart. `once` — wait for exit. |
 
-`kind=instance` is deferred while Android is down. `kind=sh` does not need zygote.
+`kind=instance` is deferred while Android is down, and starts once Android comes up. `kind=sh` does not need zygote.
+
+`nemesis service stop` lasts until the next `service start` or reboot, so the service manager does not restart a service you stopped. The locked core services still restart.
 
 A `mode=restart` service that dies 5 times is disabled and `service list` shows it as `failed`. Starting it by hand gives it one more run, and if it stays up for 10 seconds the count is cleared so restarts work again. If it dies during that run it stays disabled. Installing, updating, or uninstalling the package also clears the count.
 
@@ -244,5 +246,9 @@ Locked packages print `package is locked` and stay. Wipe NEMESIS removes everyth
 6. Extract to `/data/local/tmp/nemesis/stage/<id>`. A member whose path contains `..` rejects the whole
    package, so extraction cannot escape the staging directory.
 7. `preinstall` → copy tree to `/data/nemesis/apps/<id>/` → `pm install` APKs → register services → write `packages.db` → `postinstall` → start services.
+
+If an update fails before `packages.db` is written, the old package is put back: its tree, its APKs and its services return, and its `postinstall` runs again. A non-zero `postinstall` does not undo the update. Because the old `preuninstall` and `postuninstall` have already run by then, a `postinstall` must be safe to run again.
+
+A descriptor is refused if `name`, `type` or a `[service.N]` field holds `|` or a line break, or if a hook, app or service path uses `..`. Absolute paths are allowed.
 
 Logs: `nemesis log dump` and `/data/nemesis/nemesis.log`.

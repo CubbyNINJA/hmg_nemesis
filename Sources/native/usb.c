@@ -5,24 +5,47 @@
 #include <sys/stat.h>
 #include <sys/wait.h>
 
+static int opts_have(const char *opts, const char *want) {
+    size_t n = strlen(want);
+    const char *p = opts;
+    while ((p = strstr(p, want))) {
+        if ((p == opts || p[-1] == ',') && (p[n] == 0 || p[n] == ',')) return 1;
+        p += n;
+    }
+    return 0;
+}
+
+/* Only a plain "mount -o ...remount... <target>" of /system or /. Anything with shell
+ * syntax has to run in a shell, or the rest of the command would be lost. */
 static int looks_like_sys_remount(const char *cmd, int *rw_out) {
-    size_t n;
-    int saw_root = 0;
-    if (!cmd || !strstr(cmd, "mount") || !strstr(cmd, "remount")) return 0;
-    if (strstr(cmd, "/system")) {
-        /* ok */
-    } else {
-        n = strlen(cmd);
-        while (n && cmd[n - 1] == ' ') n--;
-        if (n >= 2 && cmd[n - 2] == ' ' && cmd[n - 1] == '/') saw_root = 1;
-        else if (n == 1 && cmd[0] == '/') saw_root = 1;
-        if (!saw_root) return 0;
+    char copy[MAX_LINE], *tok, *save = NULL, *opts = NULL, *last = NULL, *word;
+    int first = 1, take_opts = 0, bare_ro = 0;
+    if (!cmd || strlen(cmd) >= sizeof(copy) || strpbrk(cmd, ";&|<>`$()\n\r\"'\\")) return 0;
+    snprintf(copy, sizeof(copy), "%s", cmd);
+    for (tok = strtok_r(copy, " \t", &save); tok; tok = strtok_r(NULL, " \t", &save)) {
+        if (first) {
+            word = strrchr(tok, '/');
+            word = word ? word + 1 : tok;
+            /* The multi-call form names the same mount, which the kernel would refuse too. */
+            if (!strcmp(word, "toolbox") || !strcmp(word, "busybox")) continue;
+            if (strcmp(word, "mount")) return 0;
+            first = 0;
+        } else if (take_opts) {
+            opts = tok;
+            take_opts = 0;
+        } else if (!strcmp(tok, "-o")) {
+            take_opts = 1;
+        } else if (!strncmp(tok, "-o", 2)) {
+            opts = tok + 2;
+        } else if (!strcmp(tok, "ro")) {
+            bare_ro = 1;
+        } else if (strcmp(tok, "rw")) {
+            last = tok;
+        }
     }
-    if (rw_out) {
-        if (strstr(cmd, "rw")) *rw_out = 1;
-        else if (strstr(cmd, "ro")) *rw_out = 0;
-        else *rw_out = 1;
-    }
+    if (!opts || !opts_have(opts, "remount") || !last) return 0;
+    if (strcmp(last, "/") && strcmp(last, "/system") && strncmp(last, "/system/", 8)) return 0;
+    if (rw_out) *rw_out = !bare_ro && !opts_have(opts, "ro");
     return 1;
 }
 

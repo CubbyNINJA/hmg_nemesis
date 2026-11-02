@@ -28,7 +28,12 @@ static int inflate_buf(const unsigned char *in, size_t inlen, unsigned char *out
     s.avail_out = (uInt)outlen;
     rc = inflate(&s, Z_FINISH);
     inflateEnd(&s);
-    return rc == Z_STREAM_END ? 0 : -1;
+    return rc == Z_STREAM_END && s.total_out == outlen ? 0 : -1;
+}
+
+static int crc_ok(const unsigned char *data, size_t n, uint32_t want) {
+    uLong crc = crc32(0L, Z_NULL, 0);
+    return (uint32_t)crc32(crc, data, (uInt)n) == want;
 }
 
 static int write_all(const char *path, const void *data, size_t n, mode_t mode) {
@@ -99,7 +104,7 @@ static int zip_iter(const char *zip,
     }
     for (i = 0; i < nument; i++) {
         uint16_t method, namelen, extralen, commentlen, flags;
-        uint32_t csize, usize, local_off;
+        uint32_t csize, usize, local_off, crc;
         char name[MAX_PATH];
         unsigned char local[30];
         unsigned char *cdata = NULL, *udata = NULL;
@@ -109,6 +114,7 @@ static int zip_iter(const char *zip,
         }
         flags = u16(hdr + 8);
         method = u16(hdr + 10);
+        crc = u32(hdr + 16);
         csize = u32(hdr + 20);
         usize = u32(hdr + 24);
         namelen = u16(hdr + 28);
@@ -161,14 +167,14 @@ static int zip_iter(const char *zip,
                 return -1;
             }
             if (method == 0) {
-                if (cb(name, cdata, csize, ctx) != 0) {
+                if (csize != usize || !crc_ok(cdata, csize, crc) || cb(name, cdata, csize, ctx) != 0) {
                     free(cdata);
                     fclose(f);
                     return -1;
                 }
             } else if (method == 8) {
                 udata = malloc(usize ? usize : 1);
-                if (!udata || inflate_buf(cdata, csize, udata, usize) != 0) {
+                if (!udata || inflate_buf(cdata, csize, udata, usize) != 0 || !crc_ok(udata, usize, crc)) {
                     free(udata);
                     free(cdata);
                     fclose(f);
@@ -226,14 +232,16 @@ static int file_cb(const char *name, const unsigned char *data, size_t n, void *
     struct file_ctx *c = v;
     const char *base = name;
     const char *sl;
-    if (c->found) return 0;
+    if (c->found == 2) return 0;
     sl = strrchr(name, '/');
     if (sl) base = sl + 1;
     if (strcasecmp(name, c->member) && strcasecmp(base, c->member)) return 0;
+    /* One at the root always wins. A nested one is for a zip of the folder. */
+    if (c->found && sl) return 0;
     if (n >= c->cap) n = c->cap - 1;
     memcpy(c->out, data, n);
     c->out[n] = 0;
-    c->found = 1;
+    c->found = sl ? 1 : 2;
     return 0;
 }
 
