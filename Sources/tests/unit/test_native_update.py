@@ -506,6 +506,35 @@ def test_a_restore_does_not_fail_over_a_file_that_never_changed(installed):
     assert qb.read_text() == "stock\n"
 
 
+def test_a_hook_too_large_to_read_whole_is_refused(installed):
+    """Given a hook one byte over what qb_rewrite can read, and one exactly at the limit (pkg.c:1161)
+    When the update applies each
+    Then the first fails and restores, and the second lands whole
+    """
+    nem = installed
+    qb = nem.path("system/etc/qb_runtime.sh")
+    qb.write_text("stock\n")
+    over = "# NEMESIS_QB_HOOK\n" + "#" * (8191 - 19) + "\n"
+    assert len(over) == 8191
+    assert nem.run("update", update_zip(nem, files={"core/qb_hook.sh": over})).returncode == 10
+    assert qb.read_text() == "stock\n"
+    fits = over[:-2] + "\n"
+    assert nem.run("update", update_zip(nem, files={"core/qb_hook.sh": fits})).returncode == 0
+    assert qb.read_text() == "stock\n" + fits
+
+
+def test_an_update_stops_only_the_watchdog_and_service_manager(installed):
+    """Given a USB handler running, which is another NEMESIS process (pkg.c:1219)
+    When the update stops the daemons
+    Then the handler is left alone, so it can report the result
+    """
+    nem = installed
+    handler = nem.daemon("usb-handler")
+    assert wait_for(lambda: "usb-handler start" in nem.log())
+    assert nem.run("update", "--no-reboot", update_zip(nem)).returncode == 0
+    assert handler.poll() is None
+
+
 # --- Root certificates
 
 

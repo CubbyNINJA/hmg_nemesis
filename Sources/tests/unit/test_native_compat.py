@@ -262,6 +262,45 @@ def test_compat_reports_on_a_zip_and_an_installed_package(nem):
 def test_compat_needs_something_it_can_find(nem):
     assert nem.run("compat").returncode == 1
     assert nem.run("compat", "absent").returncode == 1
+    bad = nem.workdir / "bad.zip"
+    bad.write_text("not a zip")
+    assert nem.run("compat", bad).returncode == 1
+
+
+def test_an_installed_package_with_no_manifest_is_reported(nem):
+    install(nem, "my.tool", "1.2")
+    (nem.app() / "NEMESIS.data").unlink()
+    res = nem.run("pkg-info", "my.tool")
+    assert res.returncode == 1
+    assert "invalid installed metadata" in res.stderr
+
+
+def apk_package(nem):
+    members = {"NEMESIS.data": "[nemesis]\nid=my.tool\n[app.0]\nkind=apk\npath=a.apk\npackage=com.example.tool\n", "a.apk": "apk"}
+    return make_zip(nem.workdir / "apk.zip", members)
+
+
+def test_an_apk_that_will_not_uninstall_keeps_the_package(nem):
+    """Given Android up and a pm that leaves the app in place (04-Packages.md section 5.4)
+    When the package is uninstalled
+    Then it exits 5, does not claim success, and the package stays
+    """
+    assert nem.run("install", apk_package(nem)).returncode == 0
+    nem.pm_script('case "$1" in path) echo package:/data/app/a.apk ;; *) echo Success ;; esac\n')
+    res = nem.run("uninstall", "my.tool")
+    assert res.returncode == 5
+    assert "ok uninstalled" not in res.stdout
+    assert nem.app().is_dir()
+
+
+def test_with_android_down_uninstall_does_not_wait_on_pm_path(nem):
+    assert nem.run("install", apk_package(nem)).returncode == 0
+    nem.android(up=False)
+    nem.pm_script('case "$1" in path) echo package:/data/app/a.apk ;; *) echo Success ;; esac\n')
+    res = nem.run("uninstall", "my.tool")
+    assert res.returncode == 0
+    assert "ok uninstalled my.tool" in res.stdout
+    assert "pm path" not in nem.calls()
 
 
 # --- What the verdict and dependencies stop

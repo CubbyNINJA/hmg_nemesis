@@ -146,15 +146,17 @@ def test_svcmgr_gives_up_after_five_rapid_deaths(nem):
 def test_svcmgr_restarts_a_service_that_died(nem):
     install_service(nem, mode="restart")
     nem.daemon("svcmgr")
-    assert wait_for(lambda: len(status(nem).split("|")) > 3 and status(nem).split("|")[3] != "0", 10)
-    pid = status(nem).split("|")[3]
-    os.kill(int(pid), 9)
 
-    def restarted():
+    def pid_other_than(*seen):
+        # Read once per check. Each status call reads the service list again, and it can change.
         fields = status(nem).split("|")
-        return len(fields) > 3 and fields[3] not in ("0", pid)
+        return fields[3] if len(fields) > 3 and fields[3] not in seen else None
 
-    assert wait_for(restarted, 10)
+    seen = []
+    assert wait_for(lambda: seen.append(pid_other_than("0")) or seen[-1], 10)
+    pid = seen[-1]
+    os.kill(int(pid), 9)
+    assert wait_for(lambda: pid_other_than("0", pid), 10)
 
 
 def test_svcmgr_does_not_restart_a_background_service(nem):
