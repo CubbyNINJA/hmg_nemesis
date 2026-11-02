@@ -263,6 +263,19 @@ def test_a_restore_puts_back_a_deleted_quickboot_file(installed):  # noqa: F811
     assert qb.read_text() == "stock\n"
 
 
+def test_a_hook_that_cannot_keep_its_owner_is_not_replaced(nem):
+    """Given a QuickBoot file whose replacement cannot be given the right owner (pkg.c:1134)
+    When the unit is wiped
+    Then the file is left as it was, rather than replaced with the wrong owner
+    """
+    qb = nem.path("system/etc/qb_runtime.sh")
+    text = "stock\n" + OLD_HOOK
+    qb.write_text(text)
+    nem.path("chown_fails").write_text("")
+    nem.run("wipe", "--confirm", "--no-reboot")
+    assert qb.read_text() == text
+
+
 @known_bug("G31", "wipe ignores a failure to remove the QuickBoot hook and reports success")
 def test_a_wipe_that_cannot_remove_the_hook_says_so(nem):
     """Given a QuickBoot file whose hook cannot be removed (02 wipe)
