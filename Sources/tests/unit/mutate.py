@@ -24,6 +24,16 @@ REPO = Path(__file__).resolve().parents[3]
 MAX_PROCESSES = 3000
 # Well above a clean run of the slowest test set, so a timeout means the mutant hung the tests.
 TEST_TIMEOUT = 1200
+# Process 1 of a namespace. It collects orphans, because a killed daemon stays in /proc until its
+# parent does, and tests check /proc to see that it died.
+NAMESPACE_INIT = """
+import os, subprocess, sys
+child = subprocess.Popen(sys.argv[1:])
+while True:
+    pid, status = os.wait()
+    if pid == child.pid:
+        sys.exit(os.WEXITSTATUS(status) if os.WIFEXITED(status) else 128 + os.WTERMSIG(status))
+"""
 
 SHELL_OPS = [
     (r"\breturn 1\b", "return 0"),
@@ -231,7 +241,8 @@ def isolated(cmd: list) -> list:
     the test run, so nothing else the user is running can be hit.
     """
     uid, gid = os.getuid(), os.getgid()
-    return ["unshare", "--user", f"--map-user={uid}", f"--map-group={gid}", "--pid", "--fork", "--kill-child", "--mount-proc", *cmd]
+    namespace = ["unshare", "--user", f"--map-user={uid}", f"--map-group={gid}", "--pid", "--fork", "--kill-child", "--mount-proc"]
+    return [*namespace, sys.executable, "-c", NAMESPACE_INIT, *cmd]
 
 
 def isolation_works() -> bool:
