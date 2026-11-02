@@ -1015,8 +1015,18 @@ int cmd_install(int argc, char **argv) {
         snprintf(oldmeta, sizeof(oldmeta), "%s/NEMESIS.data", oldroot);
         stop_pkg_services(id);
         if (is_file(oldmeta) && ini_load(&oldini, oldmeta) == 0) {
-            run_named_hook(&oldini, oldroot, "preuninstall");
-            pm_uninstall_apks(&oldini, oldroot);
+            /* As uninstall does: what the hook changed on the unit may still be changed,
+             * and the new package's postinstall would snapshot it as the original. */
+            int hook_rc = run_named_hook(&oldini, oldroot, "preuninstall");
+            if (hook_rc != 0 || pm_uninstall_apks(&oldini, oldroot)) {
+                log_msg("update %s: the old package would not uninstall (preuninstall=%d)", id, hook_rc);
+                fprintf(stderr, "update failed: %s: the old package would not uninstall\n", id);
+                ini_free(&oldini);
+                ini_free(&ini);
+                rm_rf(stage_top);
+                start_pkg_services(id);
+                return 5;
+            }
             svc_remove_prefix(id);
             run_named_hook(&oldini, oldroot, "postuninstall");
             ini_free(&oldini);
@@ -1576,13 +1586,9 @@ int cmd_wipe(int argc, char **argv) {
         fflush(stdout);
         return 1;
     }
-    if (hook_left) {
-        /* The boot script would go on calling a binary that is gone. */
-        fprintf(stderr, "wipe incomplete: the QuickBoot hook is still in place\n");
-        fprintf(stdout, "wipe incomplete\n");
-        fflush(stdout);
-        return 1;
-    }
+    /* The hook checks for the binary, so it does nothing now. The CLI is already
+     * gone, so failing here would leave nothing to retry with. */
+    if (hook_left) fprintf(stdout, "wipe note: the QuickBoot hook stayed in qb_runtime.sh and does nothing\n");
     fprintf(stdout, "ok wiped\n");
     fflush(stdout);
     if (reboot) {

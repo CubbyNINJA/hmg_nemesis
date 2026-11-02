@@ -450,8 +450,15 @@ static void remove_tmp_files(void) {
     }
 }
 
+/* What a restore needs if an update deletes the QuickBoot file. */
+typedef struct {
+    struct stat st;
+    char label[256];
+    ssize_t label_len;
+} qb_attrs;
+
 /* had[i]: the file existed before the update. */
-static int restore_backup(const char *bak, const int *had, int have_qb, mode_t qb_mode, const char *added_ca) {
+static int restore_backup(const char *bak, const int *had, int have_qb, const qb_attrs *qb, const char *added_ca) {
     int i, bad = 0;
     char p[MAX_PATH];
     log_msg("update: restoring backup");
@@ -474,9 +481,16 @@ static int restore_backup(const char *bak, const int *had, int have_qb, mode_t q
         md5_file_hex(p, saved);
         md5_file_hex(QB_RUNTIME, live);
         /* A file the update never reached is already right. One that is gone has
-         * no attributes left to keep, so it comes back with the mode it had. */
+         * no attributes left to copy, so it gets back the ones saved before the update. */
         if (!is_file(QB_RUNTIME)) {
-            if (place_file(p, QB_RUNTIME, qb_mode) != 0) bad = 1;
+            if (place_file(p, QB_RUNTIME, qb->st.st_mode & 07777) != 0) {
+                bad = 1;
+            } else {
+                if (chown(QB_RUNTIME, qb->st.st_uid, qb->st.st_gid) != 0 || chmod(QB_RUNTIME, qb->st.st_mode & 07777) != 0)
+                    log_msg("update: restore %s owner failed errno=%d", QB_RUNTIME, errno);
+                if (qb->label_len > 0 && lsetxattr(QB_RUNTIME, "security.selinux", qb->label, (size_t)qb->label_len, 0) != 0)
+                    log_msg("update: restore %s label failed errno=%d", QB_RUNTIME, errno);
+            }
         } else if ((!saved[0] || strcmp(saved, live)) && replace_keep_attrs(p, QB_RUNTIME) != 0) {
             bad = 1;
         }
@@ -557,9 +571,12 @@ int cmd_update(int argc, char **argv) {
     int i, force = 0, accept_risk = 0, reboot = 1, compat, had[N_CORE], have_qb = 0, rc;
     char stage[MAX_PATH], root[MAX_PATH], bak[MAX_PATH], p[MAX_PATH], reasons[1024];
     char added_ca[2048];
-    mode_t qb_mode = 0755;
+    qb_attrs qb;
     ini_file ini;
     pkg_meta m;
+
+    memset(&qb, 0, sizeof(qb));
+    qb.st.st_mode = 0755;
 
     for (i = 0; i < argc; i++) {
         if (!strcmp(argv[i], "--force")) force = 1;
@@ -656,8 +673,8 @@ int cmd_update(int argc, char **argv) {
         }
     }
     if (is_file(QB_RUNTIME)) {
-        struct stat qb_st;
-        if (stat(QB_RUNTIME, &qb_st) == 0) qb_mode = qb_st.st_mode & 07777;
+        if (stat(QB_RUNTIME, &qb.st) == 0)
+            qb.label_len = lgetxattr(QB_RUNTIME, "security.selinux", qb.label, sizeof(qb.label));
         snprintf(p, sizeof(p), "%s/qb_runtime.sh", bak);
         if (copy_file(QB_RUNTIME, p, 0600) != 0) {
             fprintf(stderr, "update: backup of %s failed\n", QB_RUNTIME);
@@ -730,7 +747,7 @@ int cmd_update(int argc, char **argv) {
     return 0;
 
 fail:
-    rc = restore_backup(bak, had, have_qb, qb_mode, added_ca);
+    rc = restore_backup(bak, had, have_qb, &qb, added_ca);
     rm_rf(stage);
     snprintf(p, sizeof(p), "%s/last-result", UPDATE_DIR);
     write_file(p, rc == 0 ? "failed restored\n" : "failed restore-failed\n", 0644);

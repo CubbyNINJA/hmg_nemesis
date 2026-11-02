@@ -178,6 +178,30 @@ def test_a_restored_quickboot_file_gets_its_mode_back(installed):  # noqa: F811
     assert stat.S_IMODE(qb.stat().st_mode) == 0o750
 
 
+def test_a_restored_quickboot_file_gets_its_label_back(installed):  # noqa: F811
+    nem = installed
+    qb = nem.path("system/etc/qb_runtime.sh")
+    qb.write_text("stock\n")
+    nem.path("labels_accepted").write_text("")
+    assert nem.run("update", update_zip(nem, files={"scripts/migrate.sh": f'rm "{qb}"\nexit 1\n'})).returncode == 10
+    assert any(line.endswith("system/etc/qb_runtime.sh") for line in nem.path("labels.log").read_text().splitlines())
+
+
+def test_a_stick_reinstall_stops_when_the_old_package_will_not_uninstall(nem):
+    """Given an installed package whose preuninstall fails, and a stick with a new copy (04-Packages.md section 2)
+    When the user confirms
+    Then the failure is reported and the old package stays, as it did when the stick uninstalled first
+    """
+    extra = "preuninstall=scripts/u.sh\n"
+    nem.run("install", nem.package(log_hooks=False, extra_meta=extra, files={"scripts/u.sh": "exit 1\n", "old.txt": "x"}))
+    nem.answer_dialogs("yes")
+    new = make_zip(nem.workdir / "n.zip", {"NEMESIS.data": "[nemesis]\nid=my.tool\n", "new.txt": "y"})
+    nem.stick("[nemesis]\ntype=install\npath=p.zip\n", {"p.zip": new.read_bytes()})
+    nem.daemon("usb-handler")
+    assert wait_for(lambda: "nemesis_mode result_fail" in nem.calls(), 25), nem.log()
+    assert (nem.app() / "old.txt").exists()
+
+
 def test_the_store_updates_with_rollback():
     """Given Manager's Store updating an installed package (no host test can run this Java)
     When it installs the new version

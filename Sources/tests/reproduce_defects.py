@@ -300,7 +300,16 @@ def g31(nem):
     qb.write_text("stock\n" + OLD_HOOK)
     nem.path("chown_fails").write_text("")
     res = nem.run("wipe", "--confirm", "--no-reboot")
-    return f"exit {res.returncode}: {first(res.stdout, '^(ok wiped|wipe incomplete)')}; hook still in the boot script: {'yes' if 'NEMESIS_QB_HOOK' in qb.read_text() else 'no'}"
+    return f"exit {res.returncode}: {first(res.stdout, '^(wipe note|ok wiped|wipe incomplete)')}; hook still in the boot script: {'yes' if 'NEMESIS_QB_HOOK' in qb.read_text() else 'no'}"
+
+
+@case("G34", "my.tool's preuninstall exits 1, so what it changed on the unit may still be changed.", "nemesis install --update new.zip")
+def g34(nem):
+    extra = "preuninstall=scripts/u.sh\n"
+    nem.run("install", nem.package(log_hooks=False, extra_meta=extra, files={"scripts/u.sh": "exit 1\n", "old.txt": "x"}))
+    new = make_zip(nem.workdir / "n.zip", {"NEMESIS.data": "[nemesis]\nid=my.tool\n", "new.txt": "y"})
+    res = nem.run("install", "--update", new)
+    return f"{outcome(res, 'update failed|ok updated')}; old package: {'kept' if (nem.app() / 'old.txt').exists() else 'REPLACED'}"
 
 
 @case("G32", "watchdog.pid holds only a pid, and it is the pid the new watchdog gets.", "nemesis watchdog")
