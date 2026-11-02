@@ -937,7 +937,6 @@ def reinstall_stick(nem, new_members):
     nem.stick("[nemesis]\ntype=install\npath=p.zip\n", {"p.zip": package.read_bytes()})
 
 
-@known_bug("G25", "USB reinstall uninstalls first, so a failed install leaves no package at all")
 def test_a_failed_reinstall_from_a_stick_keeps_the_installed_package(nem):
     """Given an installed package and a stick whose new copy fails its preinstall (04-Packages.md section 5)
     When the user confirms the update
@@ -952,7 +951,6 @@ def test_a_failed_reinstall_from_a_stick_keeps_the_installed_package(nem):
     assert "my.tool|" in nem.db()
 
 
-@known_bug("G25", "USB reinstall uninstalls before the risk dialog, so answering no still loses the package")
 def test_declining_the_risk_on_a_reinstall_keeps_the_installed_package(nem):
     """Given an installed package and a stick whose new copy is marked incompatible
     When the user confirms the update and then declines the risk

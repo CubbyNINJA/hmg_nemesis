@@ -726,7 +726,6 @@ def test_an_argument_at_the_size_limit_works_or_is_refused_by_the_client(nem):
 
 
 @pytest.mark.skipif(not os.environ.get("NEMESIS_SANITIZE"), reason="only ASan can see this; the log usually looks right without it")
-@known_bug("G22", "usb.c frees the descriptor at line 563, then logs type and path from it at line 566")
 def test_the_handler_logs_an_insertion_without_reading_freed_memory(nem):
     """Given a build with ASan and a stick with a valid execute descriptor
     When the USB Handler finishes with it
