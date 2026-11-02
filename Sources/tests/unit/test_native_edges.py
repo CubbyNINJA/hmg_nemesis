@@ -12,7 +12,6 @@ import zipfile
 
 import pytest
 
-from helpers import known_bug
 from native_unit import executable, make_zip, wait_for
 
 SVC = "my.tool/d"
