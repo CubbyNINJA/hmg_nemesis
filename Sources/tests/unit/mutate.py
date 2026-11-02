@@ -22,6 +22,8 @@ from queue import Queue
 
 REPO = Path(__file__).resolve().parents[3]
 MAX_PROCESSES = 3000
+# Well above a clean run of the slowest test set, so a timeout means the mutant hung the tests.
+TEST_TIMEOUT = 1200
 
 SHELL_OPS = [
     (r"\breturn 1\b", "return 0"),
@@ -222,9 +224,28 @@ def run_tests(root: Path, tests) -> int:
         shutil.rmtree(unit_tmp, ignore_errors=True)
 
 
+def isolated(cmd: list) -> list:
+    """Runs cmd in its own PID namespace, as the same user.
+
+    A mutant of stop_daemons() can kill every process it is allowed to signal. In here that is only
+    the test run, so nothing else the user is running can be hit.
+    """
+    uid, gid = os.getuid(), os.getgid()
+    return ["unshare", "--user", f"--map-user={uid}", f"--map-group={gid}", "--pid", "--fork", "--kill-child", "--mount-proc", *cmd]
+
+
+def isolation_works() -> bool:
+    try:
+        return subprocess.run(isolated(["true"]), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0
+    except OSError:
+        return False
+
+
 def run_pytest(root: Path, tests, unit_tmp: Path) -> int:
     env = dict(os.environ, PYTHONDONTWRITEBYTECODE="1", NEMESIS_UNIT_TMP=str(unit_tmp))
     cmd = [sys.executable, "-B", "-m", "pytest", "-x", "-q", "--basetemp", str(root / ".tmp"), *tests]
+    if os.name == "posix":
+        cmd = isolated(cmd)
     try:
         return subprocess.run(
             cmd,
@@ -232,7 +253,7 @@ def run_pytest(root: Path, tests, unit_tmp: Path) -> int:
             env=env,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
-            timeout=450,
+            timeout=TEST_TIMEOUT,
             preexec_fn=limit_resources if os.name == "posix" else None,
         ).returncode
     except subprocess.TimeoutExpired:
@@ -253,7 +274,7 @@ def run_mutant(mutant, pool: Queue) -> dict:
         target.write_bytes(original)
         pool.put(root)
     result = {k: mutant[k] for k in ("file", "line", "from", "to")}
-    result["status"] = "survived" if rc == 0 else "killed"
+    result["status"] = "survived" if rc == 0 else "timeout" if rc == 124 else "killed"
     print(f"{result['status']:9} {mutant['file']}:{mutant['line']}  {mutant['to'][:80]}", flush=True)
     return result
 
@@ -283,6 +304,9 @@ def main() -> int:
         for mutant in mutants:
             mutant["tests"] = args.tests
     print(f"{len(mutants)} mutants", flush=True)
+    if os.name == "posix" and not isolation_works():
+        print("cannot start a PID namespace, and a mutant could kill your other processes without one", file=sys.stderr)
+        return 2
     base = Path(tempfile.mkdtemp(prefix="nemesis-mut-"))
     try:
         pool: Queue = Queue()

@@ -118,7 +118,7 @@ python3 -B -m pytest Sources/tests/unit/test_native_properties.py -k damaged
 
 `mutate.py` breaks the code one small change at a time, then checks that a test notices. A change no test notices has **survived**, which points to a missing test unless the change cannot affect behaviour.
 
-Run it from the repo root. It works on throwaway copies, so your files do not change.
+Run it from the repo root. It works on throwaway copies, so your files do not change. Each mutant's tests run in their own PID namespace, because a broken `stop_daemons` can kill every process it can reach. It needs `unshare` and user namespaces, and stops if they are missing.
 
 ```sh
 export NEMESIS_REQUIRE_NATIVE=1 NEMESIS_TEST_SH=/usr/bin/mksh
