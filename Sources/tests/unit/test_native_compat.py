@@ -5,6 +5,7 @@ Sources: 04-Packages.md sections 2 and 3, 05-Run-Scripts.md section 2, and
 """
 from __future__ import annotations
 
+import re
 import subprocess
 import time
 
@@ -371,6 +372,11 @@ def test_an_id_too_long_for_its_buffer_is_refused(nem):
     assert "id is too long" in res.stderr
 
 
+def test_ini_values_keep_their_quoted_forms(nem):
+    res = info(nem, '[nemesis]\nid=my.tool\nname=\t"a\\"b\\\\c"\n')
+    assert field(res, "name") == 'a"b\\c'
+
+
 @pytest.mark.parametrize("quote", ["", '"'], ids=["plain", "quoted"])
 def test_ini_values_fit_up_to_their_limit(nem, quote):
     """Given a value of 1023 bytes, and one of 1024 (ini.c:100)
@@ -457,8 +463,162 @@ def test_starting_a_disabled_service_by_hand_gives_it_one_more_run(nem):
     assert "manual start of disabled service my.tool/d" in nem.log()
 
 
+def sleeper(nem, name="d"):
+    sections = f"[service.0]\nname={name}\nkind=sh\npath=svc/d.sh\nmode=background\n"
+    assert nem.run("install", nem.package(log_hooks=False, sections=sections, files={"svc/d.sh": "sleep 60\n"})).returncode == 0
+    return nem.path(f"data/nemesis/pids/my.tool+{name}")
+
+
+def is_running(nem, qname="my.tool/d"):
+    return "|running" in nem.run("service", "status", qname).stdout
+
+
+def test_a_pidfile_records_the_process_and_this_boot(nem):
+    """Given a service started on this boot (util.c:512)
+    When its pidfile is written
+    Then it holds the pid, its start time, and the 32 hex token kept in tmpfs
+    """
+    fields = sleeper(nem).read_text().split()
+    assert len(fields) == 3
+    token = nem.path("dev/.nemesis-boot").read_text().strip()
+    assert re.fullmatch(r"[0-9a-f]{32}", token)
+    assert fields[2] == token
+
+
+def test_a_pidfile_from_an_earlier_boot_does_not_count(nem):
+    """Given a live process whose pid and start time match a pidfile, as can repeat across boots
+    When the file's token is from another boot
+    Then the service counts as stopped
+    """
+    pidfile = sleeper(nem)
+    assert is_running(nem)
+    pid, start, _ = pidfile.read_text().split()
+    pidfile.write_text(f"{pid} {start} {'0' * 32}\n")
+    assert not is_running(nem)
+
+
+def test_a_new_token_after_a_reboot_makes_old_pidfiles_stale(nem):
+    pidfile = sleeper(nem)
+    token = nem.path("dev/.nemesis-boot")
+    token.write_text("1" * 32 + "\n")
+    assert not is_running(nem)
+    assert pidfile.exists()
+
+
+def test_a_matching_token_needs_the_start_time_to_match_too(nem):
+    pidfile = sleeper(nem)
+    pid, start, token = pidfile.read_text().split()
+    pidfile.write_text(f"{pid} {int(start) + 1} {token}\n")
+    assert not is_running(nem)
+
+
+def test_a_matching_token_is_proof_without_the_command_line(nem):
+    """Given a pidfile with the right pid, start time and token, on a service whose name is not in its command line"""
+    pidfile = sleeper(nem)
+    proc = subprocess.Popen(["sleep", "60"])
+    try:
+        start = open(f"/proc/{proc.pid}/stat").read().rsplit(")", 1)[1].split()[19]
+        token = pidfile.read_text().split()[2]
+        pidfile.write_text(f"{proc.pid} {start} {token}\n")
+        assert is_running(nem)
+    finally:
+        proc.kill()
+        proc.wait()
+
+
+@pytest.mark.parametrize("command, running", [("zzdaemon", True), ("other", False)])
+def test_a_pidfile_from_1_15_needs_the_command_line_to_match(nem, command, running):
+    """Given a pidfile with no token, as 1.15 wrote them (util.c:594)
+    When its start time matches a live process
+    Then the service counts as running only if the process's command line names it
+    """
+    pidfile = sleeper(nem, "zzdaemon")
+    script = nem.workdir / command
+    script.write_text("sleep 60\n")
+    proc = subprocess.Popen(["sh", str(script)])
+    try:
+        assert wait_for(lambda: str(script).encode() in open(f"/proc/{proc.pid}/cmdline", "rb").read())
+        start = open(f"/proc/{proc.pid}/stat").read().rsplit(")", 1)[1].split()[19]
+        pidfile.write_text(f"{proc.pid} {start}\n")
+        assert is_running(nem, "my.tool/zzdaemon") == running
+    finally:
+        proc.kill()
+        proc.wait()
+
+
+@pytest.mark.parametrize("text", ["short\n", "", "g" * 10 + "\n"], ids=["short", "empty", "not-32"])
+def test_a_damaged_token_file_falls_back_to_a_pidfile_without_a_token(nem, text):
+    """Given a token file too short to use, which link() cannot replace (util.c:538)
+    When a service starts
+    Then its pidfile has no token, and the service still counts as running
+    """
+    nem.path("dev/.nemesis-boot").write_text(text)
+    pidfile = sleeper(nem)
+    assert len(pidfile.read_text().split()) == 2
+    assert is_running(nem)
+
+
+def test_a_token_is_created_only_once(nem):
+    sleeper(nem)
+    token = nem.path("dev/.nemesis-boot").read_text()
+    nem.run("service", "stop", "my.tool/d")
+    nem.run("service", "start", "my.tool/d")
+    assert nem.path("dev/.nemesis-boot").read_text() == token
+    assert [p.name for p in nem.path("dev").glob(".nemesis-boot.*")] == []
+
+
+def test_a_unit_where_no_token_can_be_written_still_runs_services(nem):
+    dev = nem.path("dev")
+    dev.chmod(0o555)
+    try:
+        pidfile = sleeper(nem)
+        assert len(pidfile.read_text().split()) == 2
+        assert is_running(nem)
+    finally:
+        dev.chmod(0o755)
+
+
+def test_a_stale_watchdog_pidfile_naming_this_process_does_not_stop_it(nem):
+    """Given a watchdog pidfile holding the pid the new watchdog happens to get (util.c:574)
+    When the watchdog starts
+    Then it does not take itself for one already running
+    """
+    pidfile = nem.path("data/nemesis/watchdog.pid")
+    subprocess.Popen(["sh", "-c", f'echo "$$ 1 {"0" * 32}" > "{pidfile}"; exec "{nem.cli}" watchdog'], cwd=str(nem.workdir), start_new_session=True,
+                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    assert wait_for(lambda: "watchdog start" in nem.log()), nem.log()
+    assert "already running" not in nem.log()
+
+
+def test_a_running_service_earns_back_its_restart_count_only_after_staying_up(nem):
+    """Given a running service with deaths on record (04-Packages.md section 4)
+    When svcmgr watches it
+    Then the count stands while the service is young, and clears once it has stayed up 10 seconds
+    """
+    sections = "[service.0]\nname=d\nkind=sh\npath=svc/d.sh\nmode=restart\n"
+    nem.run("install", nem.package(log_hooks=False, sections=sections, files={"svc/d.sh": "sleep 60\n"}))
+    fails = nem.path("data/nemesis/pids/my.tool+d.fails")
+    fails.write_text("3\n")
+    nem.daemon("svcmgr")
+    time.sleep(4)
+    assert fails.read_text().strip() == "3"
+    assert wait_for(lambda: fails.read_text().strip() == "0", 15)
+
+
 def android_up_events(nem):
     return nem.calls().count("com.nemesis.manager.ANDROID_UP")
+
+
+def test_android_must_hold_up_before_it_is_announced(nem):
+    """Given Android just up, since the package manager can dip the value during an install (svc.c:324)
+    When the service manager has seen it for under 5 seconds
+    Then nothing is sent yet, and the service manager outlives the event
+    """
+    daemon = nem.daemon("svcmgr")
+    time.sleep(3)
+    assert android_up_events(nem) == 0
+    assert wait_for(lambda: android_up_events(nem) == 1, 15), nem.log()
+    assert daemon.poll() is None
 
 
 def test_android_up_is_announced_only_once_android_is_up(nem):
@@ -596,6 +756,41 @@ def test_an_update_stick_that_fails_says_so(nem):
     run_handler(nem)
     assert wait_for(lambda: "nemesis_mode result_fail" in nem.calls(), timeout=25), nem.log()
     assert nem.cli.read_bytes() == nem.binary.read_bytes()
+    assert "confirm_risk" not in nem.calls()
+
+
+def test_a_declined_update_stick_asks_only_once(nem):
+    nem.answer_dialogs("no")
+    update_stick(nem)
+    run_handler(nem)
+    handled(nem)
+    time.sleep(4)
+    assert nem.calls().count("nemesis_mode confirm_update") == 1
+
+
+def test_a_list_stick_opens_the_store_only_once(nem):
+    nem.stick("[nemesis]\ntype=list\n")
+    run_handler(nem)
+    assert wait_for(lambda: "store_mode usb" in nem.calls()), nem.log()
+    time.sleep(4)
+    assert nem.calls().count("store_mode usb") == 1
+
+
+@pytest.mark.parametrize("answer, installed", [("yes", True), ("no", False)])
+def test_a_first_install_of_an_incompatible_package_asks_about_the_risk(nem, answer, installed):
+    """Given a stick with a package marked for another OS and model, not yet installed (usb.c:425)
+    When the user confirms the install and then answers the risk dialog
+    Then yes installs it, and no leaves nothing behind
+    """
+    answer_in_turn(nem, "yes", answer, "ok")
+    package = make_zip(nem.workdir / "new.zip", {"NEMESIS.data": "[nemesis]\nid=my.tool\nos=none\nmodels=none\n"})
+    nem.stick("[nemesis]\ntype=install\npath=p.zip\n", {"p.zip": package.read_bytes()})
+    run_handler(nem)
+    expected = "nemesis_mode result_ok" if installed else "nemesis_mode confirm_risk"
+    assert wait_for(lambda: expected in nem.calls(), timeout=25), nem.log()
+    if not installed:
+        assert wait_for(lambda: "risk declined" in nem.log(), timeout=25), nem.log()
+    assert ("my.tool|" in nem.db()) == installed
 
 
 def answer_in_turn(nem, *replies):

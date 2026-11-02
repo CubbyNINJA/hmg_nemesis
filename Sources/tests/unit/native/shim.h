@@ -100,6 +100,7 @@ void shim_exit(int code) __attribute__((noreturn));
 #define open(path, ...) open(shim_path(path), __VA_ARGS__)
 #define fopen(path, mode) fopen(shim_path(path), mode)
 #define unlink(path) unlink(shim_path(path))
+#define link(from, to) link(shim_path(from), shim_path(to))
 #define opendir(path) opendir(shim_path(path))
 #define stat(path, st) stat(shim_path(path), st)
 #define chown(path, owner, group) shim_chown(path, owner, group)

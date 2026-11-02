@@ -222,12 +222,12 @@ def reap(marker: str) -> int:
     return killed
 
 
-def run_tests(root: Path, tests) -> int:
+def run_tests(root: Path, tests, output=None) -> int:
     # Short, because unit sockets live under it and sun_path holds 108 bytes.
     unit_tmp = Path(f"/tmp/nm{os.getpid()}-{root.name}")
     unit_tmp.mkdir(exist_ok=True)
     try:
-        return run_pytest(root, tests, unit_tmp)
+        return run_pytest(root, tests, unit_tmp, output)
     finally:
         if os.name == "posix":
             reap(str(unit_tmp) + "/")
@@ -252,7 +252,7 @@ def isolation_works() -> bool:
         return False
 
 
-def run_pytest(root: Path, tests, unit_tmp: Path) -> int:
+def run_pytest(root: Path, tests, unit_tmp: Path, output=None) -> int:
     env = dict(os.environ, PYTHONDONTWRITEBYTECODE="1", NEMESIS_UNIT_TMP=str(unit_tmp))
     cmd = [sys.executable, "-B", "-m", "pytest", "-x", "-q", "--basetemp", str(root / ".tmp"), *tests]
     if os.name == "posix":
@@ -262,8 +262,8 @@ def run_pytest(root: Path, tests, unit_tmp: Path) -> int:
             cmd,
             cwd=str(root / "Sources/tests/unit"),
             env=env,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+            stdout=output or subprocess.DEVNULL,
+            stderr=subprocess.STDOUT if output else subprocess.DEVNULL,
             timeout=TEST_TIMEOUT,
             preexec_fn=limit_resources if os.name == "posix" else None,
         ).returncode
@@ -327,9 +327,12 @@ def main() -> int:
             pool.put(root)
         probe = pool.get()
         for tests in {tuple(m["tests"]) for m in mutants}:
-            if run_tests(probe, list(tests)) != 0:
-                print(f"baseline is not green for {tests}", file=sys.stderr)
-                return 2
+            with tempfile.TemporaryFile("w+", errors="replace") as output:
+                if run_tests(probe, list(tests), output) != 0:
+                    output.seek(0)
+                    print(f"baseline is not green for {tests}", file=sys.stderr)
+                    print("\n".join(output.read().splitlines()[-40:]), file=sys.stderr)
+                    return 2
         pool.put(probe)
         with ThreadPoolExecutor(args.jobs) as ex:
             results = list(ex.map(lambda m: run_mutant(m, pool), mutants))

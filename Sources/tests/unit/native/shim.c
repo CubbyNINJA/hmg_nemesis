@@ -37,7 +37,8 @@ const char *shim_path(const char *path) {
     char *out;
     if (!path) return path;
     if (!strcmp(path, "/proc/mounts")) return TEST_ROOT "/proc_mounts";
-    if (strncmp(path, "/system/", 8) && strncmp(path, "/data/", 6) && strncmp(path, "/cache/", 7))
+    if (strncmp(path, "/system/", 8) && strncmp(path, "/data/", 6) && strncmp(path, "/cache/", 7) &&
+        strncmp(path, "/dev/.nemesis", 13))
         return path;
     out = ring[next];
     next = (next + 1) % 8;
