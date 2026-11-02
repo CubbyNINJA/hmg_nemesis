@@ -110,7 +110,7 @@ The online tab reads the catalog from xwtk.Portal. If the portal cannot be reach
 
 **Settings → Check for updates** looks at a USB stick first, then the portal. If neither has an update, the popup says which one failed.
 
-The background check runs on the Update Monitor's hourly tick and only goes out if 24 hours have passed since the last successful check. If the clock is not yet sane (the unit reads 2015 until it has real time), elapsed time since boot is used. A failed background check is silent and is retried on the next tick. for what `nemesis update` does.
+The background check runs on the Update Monitor's hourly tick and only goes out if 24 hours have passed since the last successful check. If the clock is not yet sane (the unit reads 2015 until it has real time), elapsed time since boot is used. A failed background check is silent and is retried on the next tick.
 
 ### 3.3 Recovery with Android down
 
@@ -149,7 +149,7 @@ Notes:
 - `pkg-list` lines: `id|name|locked|types|package-version|short-desc` (`locked` is `1` or `0`). `short-desc` is percent-encoded for `%`, `|`, CR, and LF.
 - `install` exit codes: 20 not marked compatible (pass `--accept-risk`), 21 the update would break an installed dependent.
 - `uninstall` exit codes: 4 other packages depend on it, 5 a hook or `pm uninstall` failed. `--force` carries on past 5, not past 4.
-- `nemesis update` exits 0 on success and non-zero on failure.
+- `nemesis update` exit codes: 0 updated, 1 usage or a bad zip, 7 older than installed, 8 the package failed its checks, 9 already up to date, 10 failed and restored, 11 failed and the restore failed too, 20 not marked compatible (pass `--accept-risk`).
 - `usb-info` prints `mounted=`, `meta=`, `root=`, `type=`, `path=`. `usb-info --list` prints the stick's `NEMESIS.data`.
 - `service list` lines: `qname|mode|state|pid`.
 - `nemesis root` with no `-c` is an interactive root shell. `nemesis root -c 'id'` runs one command. Any UID may use this channel.

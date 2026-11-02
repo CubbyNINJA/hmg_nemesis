@@ -422,7 +422,7 @@ public class DialogActivity extends Activity {
         }).start();
     }
 
-    /** Update removes the old version first, so the dependency guard applies. */
+    /** An update uses --update, which keeps the old version if the new one fails. */
     private void runStoreInstall(final String path) {
         final String replacing = getIntent().getStringExtra("nemesis_replace");
         final boolean risk = "confirm_risk".equals(mode)
@@ -430,13 +430,12 @@ public class DialogActivity extends Activity {
         new Thread(new Runnable() {
             public void run() {
                 if (replacing != null) {
-                    Cli.Result u = Cli.exec("uninstall", replacing);
-                    if (u.rc != 0) {
-                        String deps = u.rc == 4 ? dependentNames(u.out) : null;
-                        finishStore(path, "result_fail", deps == null ? null
-                                : getString(R.string.uninstall_blocked).replace("%s", deps));
-                        return;
-                    }
+                    Cli.Result u = risk ? Cli.exec("install", "--update", "--accept-risk", path)
+                            : Cli.exec("install", "--update", path);
+                    String deps = u.rc == 21 ? dependentNames(u.out) : null;
+                    finishStore(path, u.rc == 0 ? "result_ok" : "result_fail", deps == null ? null
+                            : getString(R.string.uninstall_blocked).replace("%s", deps));
+                    return;
                 }
                 Cli.Result r = risk ? Cli.exec("install", "--accept-risk", path) : Cli.exec("install", path);
                 finishStore(path, r.rc == 0 ? "result_ok" : "result_fail", null);

@@ -3,6 +3,7 @@
 #include <dirent.h>
 #include <signal.h>
 #include <sys/wait.h>
+#include <sys/xattr.h>
 
 /*
  * nemesis update <zip>: replaces the core files (binary, Manager APK,
@@ -414,6 +415,13 @@ static int place_file(const char *src, const char *dst, mode_t mode) {
         unlink(tmp);
         return -1;
     }
+    /* A file renamed into place would otherwise take its folder's default label. */
+    {
+        char label[256];
+        ssize_t n = lgetxattr(dst, "security.selinux", label, sizeof(label));
+        if (n > 0 && lsetxattr(tmp, "security.selinux", label, (size_t)n, 0) != 0)
+            log_msg("update: %s: label not copied errno=%d", dst, errno);
+    }
     {
         int fd = open(tmp, O_RDONLY);
         if (fd >= 0) {
@@ -443,7 +451,7 @@ static void remove_tmp_files(void) {
 }
 
 /* had[i]: the file existed before the update. */
-static int restore_backup(const char *bak, const int *had, int have_qb, const char *added_ca) {
+static int restore_backup(const char *bak, const int *had, int have_qb, mode_t qb_mode, const char *added_ca) {
     int i, bad = 0;
     char p[MAX_PATH];
     log_msg("update: restoring backup");
@@ -465,8 +473,13 @@ static int restore_backup(const char *bak, const int *had, int have_qb, const ch
         snprintf(p, sizeof(p), "%s/qb_runtime.sh", bak);
         md5_file_hex(p, saved);
         md5_file_hex(QB_RUNTIME, live);
-        /* A file the update never reached is already right. */
-        if ((!saved[0] || strcmp(saved, live)) && replace_keep_attrs(p, QB_RUNTIME) != 0) bad = 1;
+        /* A file the update never reached is already right. One that is gone has
+         * no attributes left to keep, so it comes back with the mode it had. */
+        if (!is_file(QB_RUNTIME)) {
+            if (place_file(p, QB_RUNTIME, qb_mode) != 0) bad = 1;
+        } else if ((!saved[0] || strcmp(saved, live)) && replace_keep_attrs(p, QB_RUNTIME) != 0) {
+            bad = 1;
+        }
     }
     if (added_ca && added_ca[0]) cacerts_remove_owned(added_ca);
     sync();
@@ -544,6 +557,7 @@ int cmd_update(int argc, char **argv) {
     int i, force = 0, accept_risk = 0, reboot = 1, compat, had[N_CORE], have_qb = 0, rc;
     char stage[MAX_PATH], root[MAX_PATH], bak[MAX_PATH], p[MAX_PATH], reasons[1024];
     char added_ca[2048];
+    mode_t qb_mode = 0755;
     ini_file ini;
     pkg_meta m;
 
@@ -642,6 +656,8 @@ int cmd_update(int argc, char **argv) {
         }
     }
     if (is_file(QB_RUNTIME)) {
+        struct stat qb_st;
+        if (stat(QB_RUNTIME, &qb_st) == 0) qb_mode = qb_st.st_mode & 07777;
         snprintf(p, sizeof(p), "%s/qb_runtime.sh", bak);
         if (copy_file(QB_RUNTIME, p, 0600) != 0) {
             fprintf(stderr, "update: backup of %s failed\n", QB_RUNTIME);
@@ -714,7 +730,7 @@ int cmd_update(int argc, char **argv) {
     return 0;
 
 fail:
-    rc = restore_backup(bak, had, have_qb, added_ca);
+    rc = restore_backup(bak, had, have_qb, qb_mode, added_ca);
     rm_rf(stage);
     snprintf(p, sizeof(p), "%s/last-result", UPDATE_DIR);
     write_file(p, rc == 0 ? "failed restored\n" : "failed restore-failed\n", 0644);

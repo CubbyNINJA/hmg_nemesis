@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pytest
 
-from helpers import NATIVE, builder_cmd, known_bug
+from helpers import NATIVE, builder_cmd
 from native_unit import make_zip, wait_for
 from test_native_edges import start_channel
 from test_native_update import HOOK, OLD_HOOK, installed, new_binary, unchanged, update_zip, tool, tool_args, tool_files  # noqa: F401
@@ -249,7 +249,6 @@ def test_a_wipe_through_the_channel_outlives_the_watchdog_it_stops(nem):
 # --- New defects found while writing these
 
 
-@known_bug("G30", "the restore cannot put back a QuickBoot file that was deleted, because it copies attributes from it")
 def test_a_restore_puts_back_a_deleted_quickboot_file(installed):  # noqa: F811
     """Given a migration that deletes the QuickBoot file and then fails
     When the restore runs
@@ -276,7 +275,6 @@ def test_a_hook_that_cannot_keep_its_owner_is_not_replaced(nem):
     assert qb.read_text() == text
 
 
-@known_bug("G31", "wipe ignores a failure to remove the QuickBoot hook and reports success")
 def test_a_wipe_that_cannot_remove_the_hook_says_so(nem):
     """Given a QuickBoot file whose hook cannot be removed (02 wipe)
     When the unit is wiped
@@ -291,7 +289,6 @@ def test_a_wipe_that_cannot_remove_the_hook_says_so(nem):
     assert "wipe incomplete" in res.stdout
 
 
-@known_bug("G32", "a pidfile holding only this watchdog's pid makes its own detached copy give up, so no watchdog runs")
 def test_a_stale_pid_only_watchdog_file_does_not_stop_the_watchdog(nem):
     """Given a watchdog pidfile with only a pid, which is the pid the new watchdog happens to get (util.c:574)
     When the watchdog starts and detaches

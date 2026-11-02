@@ -427,6 +427,7 @@ static void android_up_tick(void) {
 
 int cmd_watchdog(void) {
     int lk;
+    pid_t before_detach = getpid();
     ignore_hup_pipe();
     if (pidfile_is(WD_PIDFILE, "watchdog")) {
         log_msg("watchdog already running pid=%d", (int)read_pidfile(WD_PIDFILE));
@@ -442,7 +443,9 @@ int cmd_watchdog(void) {
     }
     ensure_dirs();
     lk = pidfile_lock(WD_PIDFILE);
-    if (pidfile_is(WD_PIDFILE, "watchdog")) {
+    /* A stale file can name the process this one detached from, which is alive and
+     * waiting, and looks like a watchdog. */
+    if (read_pidfile(WD_PIDFILE) != before_detach && pidfile_is(WD_PIDFILE, "watchdog")) {
         if (lk >= 0) close(lk);
         daemon_ready();
         _exit(0);

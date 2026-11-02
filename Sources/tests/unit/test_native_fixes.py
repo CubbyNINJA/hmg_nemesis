@@ -10,8 +10,9 @@ import zipfile
 
 import pytest
 
-from helpers import builder_cmd
+from helpers import SOURCES, builder_cmd
 from native_unit import make_zip, wait_for
+from test_native_update import installed, update_zip  # noqa: F401
 
 SVC = "my.tool/d"
 
@@ -153,6 +154,40 @@ def test_databases_are_not_world_writable_whatever_the_umask(nem, name):
     finally:
         os.umask(previous)
     assert stat.S_IMODE(nem.path(f"data/nemesis/{name}").stat().st_mode) == 0o644
+
+
+def test_files_an_update_places_keep_their_labels(installed):  # noqa: F811
+    """Given a unit with SELinux labels, whose placed files would otherwise take the folder's default
+    When an update replaces the core files
+    Then each new file gets the old file's label before it goes into place
+    """
+    nem = installed
+    nem.path("labels_accepted").write_text("")
+    assert nem.run("update", update_zip(nem, files={"core/NEMESIS.apk": "new"})).returncode == 0
+    labelled = nem.path("labels.log").read_text()
+    assert "system/xbin/nemesis.nemesis-new" in labelled
+    assert "system/app/NEMESIS.apk.nemesis-new" in labelled
+
+
+def test_a_restored_quickboot_file_gets_its_mode_back(installed):  # noqa: F811
+    nem = installed
+    qb = nem.path("system/etc/qb_runtime.sh")
+    qb.write_text("stock\n")
+    qb.chmod(0o750)
+    assert nem.run("update", update_zip(nem, files={"scripts/migrate.sh": f'rm "{qb}"\nexit 1\n'})).returncode == 10
+    assert stat.S_IMODE(qb.stat().st_mode) == 0o750
+
+
+def test_the_store_updates_with_rollback():
+    """Given Manager's Store updating an installed package (no host test can run this Java)
+    When it installs the new version
+    Then it asks for --update, so a bad zip keeps the old package
+    """
+    source = (SOURCES / "manager/src/com/nemesis/manager/DialogActivity.java").read_text(encoding="utf-8")
+    body = source[source.index("private void runStoreInstall") :]
+    body = body[: body.index("}).start();")]
+    assert '"--update"' in body
+    assert '"uninstall"' not in body
 
 
 # --- G7, G12: a stop lasts

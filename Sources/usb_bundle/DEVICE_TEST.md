@@ -48,7 +48,7 @@ ls /system/etc/install-recovery.sh
 ```
 
 Open Manager with a USB stick that has only `NEMESIS.data` (`type=open`). USB
-Handler only reacts to `/storage/usb0/NEMESIS.data`.
+Handler reacts to `NEMESIS.data` at the root of `usb0`, `usb1` or `usb2`.
 
 ## Using USB
 

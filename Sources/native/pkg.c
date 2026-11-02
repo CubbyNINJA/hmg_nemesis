@@ -1519,7 +1519,7 @@ void stop_daemons(void) {
  * uninstall failed and nothing past it was touched. */
 int cmd_wipe(int argc, char **argv) {
     pkg_rec *list = NULL;
-    int n = 0, i, confirm = 0, reboot = 1;
+    int n = 0, i, confirm = 0, reboot = 1, hook_left;
     for (i = 0; i < argc; i++) {
         if (!strcmp(argv[i], "--confirm")) confirm = 1;
         else if (!strcmp(argv[i], "--no-reboot")) reboot = 0;
@@ -1554,7 +1554,7 @@ int cmd_wipe(int argc, char **argv) {
     unlink(MANAGER_APK);
     unlink(INSTALL_RECOVERY);
     cacerts_remove_owned(NULL);
-    qb_rewrite(NULL);
+    hook_left = qb_rewrite(NULL) != 0;
     unlink(BIN_PATH);
     log_msg("wipe: removing %s", NEMESIS_ROOT);
     fprintf(stdout, "wipe step remove\n");
@@ -1565,6 +1565,13 @@ int cmd_wipe(int argc, char **argv) {
     purge_manager_dalvik();
     if (path_exists(BIN_PATH) || path_exists(MANAGER_APK) || path_exists(INSTALL_RECOVERY)) {
         fprintf(stderr, "wipe incomplete: /system stayed read-only\n");
+        fprintf(stdout, "wipe incomplete\n");
+        fflush(stdout);
+        return 1;
+    }
+    if (hook_left) {
+        /* The boot script would go on calling a binary that is gone. */
+        fprintf(stderr, "wipe incomplete: the QuickBoot hook is still in place\n");
         fprintf(stdout, "wipe incomplete\n");
         fflush(stdout);
         return 1;

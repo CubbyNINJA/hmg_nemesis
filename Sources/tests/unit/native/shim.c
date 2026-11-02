@@ -161,9 +161,10 @@ static int labels_refused(void) {
     return access(TEST_ROOT "/labels_refused", F_OK) == 0;
 }
 
+/* labels_accepted acts like a unit that takes labels, and records each one set in labels.log. */
 ssize_t shim_lgetxattr(const char *path, const char *name, void *value, size_t size) {
     static const char label[] = "u:object_r:system_file:s0";
-    if (labels_refused() && size >= sizeof(label)) {
+    if ((labels_refused() || fault_on("labels_accepted")) && size >= sizeof(label)) {
         memcpy(value, label, sizeof(label));
         return (ssize_t)sizeof(label);
     }
@@ -174,6 +175,12 @@ int shim_lsetxattr(const char *path, const char *name, const void *value, size_t
     if (labels_refused()) {
         errno = EOPNOTSUPP;
         return -1;
+    }
+    if (fault_on("labels_accepted")) {
+        char line[1100];
+        snprintf(line, sizeof(line), "%s\n", path);
+        append_line("labels.log", line);
+        return 0;
     }
     return lsetxattr(path, name, value, size, flags);
 }
