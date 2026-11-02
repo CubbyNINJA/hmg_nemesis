@@ -494,3 +494,25 @@ def test_the_builder_leaves_everything_else_as_it_is(folder, tmp_path, name, dat
     (folder / name).write_bytes(data)
     assert build(folder, tmp_path).returncode == 0
     assert zipfile.ZipFile(tmp_path / "o.zip").read(name) == data
+
+
+# --- G33: what a refused zip says
+
+
+def test_a_damaged_zip_is_not_reported_as_having_no_manifest(nem):
+    """Given a zip whose manifest is fine but whose other member fails its CRC
+    When it is read
+    Then the message points at the zip, and a zip with truly no manifest still says so
+    """
+    target = make_zip(nem.workdir / "p.zip", {"NEMESIS.data": "[nemesis]\nid=my.tool\n", "payload": b"A" * 64}, zipfile.ZIP_STORED)
+    target.write_bytes(target.read_bytes().replace(b"A" * 64, b"A" * 63 + b"B"))
+    res = nem.run("install", target)
+    assert res.returncode != 0
+    assert "zip is damaged" in res.stderr
+    assert "no NEMESIS.data" in nem.run("install", make_zip(nem.workdir / "q.zip", {"other": "x"})).stderr
+
+
+def test_an_unsafe_member_path_is_reported_as_such(nem):
+    res = nem.run("install", make_zip(nem.workdir / "p.zip", {"NEMESIS.data": "[nemesis]\nid=my.tool\n", "../x": "y"}))
+    assert res.returncode != 0
+    assert "unsafe" in res.stderr

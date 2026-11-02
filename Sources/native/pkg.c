@@ -297,9 +297,16 @@ static const char *manifest_problem(const ini_file *ini, const pkg_meta *m) {
 int load_zip_meta(const char *zip, ini_file *ini, pkg_meta *m) {
     char text[16384], err[128];
     memset(ini, 0, sizeof(*ini));
-    if (zip_extract_file(zip, "NEMESIS.data", text, sizeof(text)) != 0) {
-        fprintf(stderr, "invalid package metadata: no NEMESIS.data\n");
-        return -1;
+    {
+        int found = zip_extract_file(zip, "NEMESIS.data", text, sizeof(text));
+        if (found == -2) {
+            fprintf(stderr, "invalid package metadata: the zip is damaged or a member's path is unsafe\n");
+            return -1;
+        }
+        if (found != 0) {
+            fprintf(stderr, "invalid package metadata: no NEMESIS.data\n");
+            return -1;
+        }
     }
     if (ini_load_mem(ini, text) != 0) {
         fprintf(stderr, "invalid package metadata: %s\n", ini->err[0] ? ini->err : "parse error");

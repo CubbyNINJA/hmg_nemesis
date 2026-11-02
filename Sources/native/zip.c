@@ -252,6 +252,6 @@ int zip_extract_file(const char *zip, const char *member, char *out, size_t cap)
     c.cap = cap;
     c.found = 0;
     out[0] = 0;
-    if (zip_iter(zip, file_cb, &c) != 0) return -1;
+    if (zip_iter(zip, file_cb, &c) != 0) return -2;
     return c.found ? 0 : -1;
 }
