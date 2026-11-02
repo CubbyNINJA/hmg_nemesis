@@ -276,19 +276,47 @@ def test_a_hook_that_cannot_keep_its_owner_is_not_replaced(nem):
     assert qb.read_text() == text
 
 
-@known_bug("G31", "wipe ignores a failure to remove the QuickBoot hook and reports success")
+@known_bug("G31", "wipe ignores a failure to remove the QuickBoot hook and says nothing about it")
 def test_a_wipe_that_cannot_remove_the_hook_says_so(nem):
-    """Given a QuickBoot file whose hook cannot be removed (02 wipe)
+    """Given a QuickBoot file whose hook cannot be removed. The hook does nothing once the binary is gone
     When the unit is wiped
-    Then it exits 1 and says the wipe is incomplete, because the boot script still calls NEMESIS
+    Then the wipe finishes, because stopping there would leave no CLI to retry with, and it says the hook stayed
     """
     qb = nem.path("system/etc/qb_runtime.sh")
-    qb.write_text("stock\n" + OLD_HOOK)
+    qb.write_text("stock
+" + OLD_HOOK)
     nem.path("chown_fails").write_text("")
     res = nem.run("wipe", "--confirm", "--no-reboot")
-    assert "NEMESIS_QB_HOOK" in qb.read_text()
-    assert res.returncode == 1
-    assert "wipe incomplete" in res.stdout
+    assert res.returncode == 0
+    assert not nem.cli.exists()
+    assert "QuickBoot hook" in res.stdout
+
+
+@known_bug("G34", "install --update ignores a failed preuninstall, where uninstall stops and keeps the package")
+def test_a_failed_preuninstall_stops_an_update(nem):
+    """Given an installed package whose preuninstall fails, so what it changed on the unit may still be changed
+    When an update runs
+    Then it exits 5, as uninstall does, and the old package stays with its service running
+    """
+    sections = "[service.0]
+name=d
+kind=sh
+path=svc/d.sh
+mode=background
+"
+    extra = "preuninstall=scripts/u.sh
+"
+    files = {"svc/d.sh": "sleep 60
+", "scripts/u.sh": "exit 1
+", "old.txt": "x"}
+    assert nem.run("install", nem.package(log_hooks=False, extra_meta=extra, sections=sections, files=files)).returncode == 0
+    new = make_zip(nem.workdir / "n.zip", {"NEMESIS.data": "[nemesis]
+id=my.tool
+", "new.txt": "y"})
+    assert nem.run("install", "--update", new).returncode == 5
+    assert (nem.app() / "old.txt").exists()
+    assert not (nem.app() / "new.txt").exists()
+    assert "|running" in nem.run("service", "status", "my.tool/d").stdout
 
 
 @known_bug("G32", "a pidfile holding only this watchdog's pid makes its own detached copy give up, so no watchdog runs")
